@@ -155,6 +155,35 @@ impl ProtoKey {
             }
         }
     }
+
+    fn read_varint(&self, buf: &mut &[u8]) -> Option<u64> {
+        match self.read(buf) {
+            Some(ProtoValue::Varint(n)) => Some(n),
+            _ => None,
+        }
+    }
+
+    fn read_fixed64(&self, buf: &mut &[u8]) -> Option<u64> {
+        match self.read(buf) {
+            Some(ProtoValue::Fixed64(n)) => Some(n),
+            _ => None,
+        }
+    }
+
+    #[allow(unused)]
+    fn read_fixed32(&self, buf: &mut &[u8]) -> Option<u32> {
+        match self.read(buf) {
+            Some(ProtoValue::Fixed32(n)) => Some(n),
+            _ => None,
+        }
+    }
+
+    fn read_length_delimited<'a>(&self, buf: &mut &'a [u8]) -> Option<&'a [u8]> {
+        match self.read(buf) {
+            Some(ProtoValue::LengthDelimited(result)) => Some(result),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -198,48 +227,36 @@ fn parse_event_proto(event: &Vec<u8>, accumulator: &mut ScalarsAccumulator) {
     ) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
-            1 => print!(
-                "wall_time: {} ",
-                match key.read(buf)? {
-                    ProtoValue::Fixed64(n) => {
-                        let value = f64::from_bits(n);
-                        *wall_time = value;
-                        format!("{:?}", value)
-                    }
-                    other => format!("unexpected[{:?}]", other),
+            1 => {
+                if let Some(wall_time_bits) = key.read_fixed64(buf) {
+                    *wall_time = f64::from_bits(wall_time_bits);
+                    print!("wall_time: {:?} ", wall_time);
                 }
-            ),
-            2 => print!(
-                "step: {} ",
-                match key.read(buf)? {
-                    ProtoValue::Varint(n) => {
-                        let value = n as i64;
-                        *step = value;
-                        format!("{:?}", value)
-                    }
-                    other => format!("unexpected[{:?}]", other),
+            }
+            2 => {
+                if let Some(step_bits) = key.read_varint(buf) {
+                    *step = step_bits as i64;
+                    print!("step: {:?} ", step);
                 }
-            ),
-            3 => print!(
-                "file_version: {} ",
-                match key.read(buf)? {
-                    ProtoValue::LengthDelimited(payload) => {
-                        format!("{:?}", String::from_utf8_lossy(payload))
-                    }
-                    other => format!("unexpected[{:?}]", other),
+            }
+            3 => {
+                if let Some(file_version_bits) = key.read_length_delimited(buf) {
+                    print!(
+                        "file_version: {:?} ",
+                        String::from_utf8_lossy(file_version_bits)
+                    );
                 }
-            ),
-            5 => match key.read(buf)? {
-                ProtoValue::LengthDelimited(msg) => {
+            }
+            5 => {
+                if let Some(summary_msg) = key.read_length_delimited(buf) {
                     print!("summary {{ ");
-                    match parse_summary_proto(msg) {
+                    match parse_summary_proto(summary_msg) {
                         Some(tvs) => tag_values.extend(tvs.into_iter()),
                         None => (),
                     }
                     print!("}} ");
                 }
-                other => print!("summary {{ unexpected[{:?}] }}", other),
-            },
+            }
             n => {
                 print!("field{}[ignored] ", n);
                 key.skip(buf)?;
