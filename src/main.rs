@@ -138,11 +138,6 @@ enum ProtoValue<'a> {
 }
 
 fn parse_event_proto(event: &Vec<u8>) {
-    // Fields of messages that we don't yet parse:
-    // On `SummaryMetadata`:
-    //   PluginData plugin_data = 1;
-    // On `PluginData`:
-    //   string plugin_name = 1;
     let mut buf: &[u8] = &event[..];
     print!("event {{ ");
     while let Some(()) = parse_event_field(&mut buf) {}
@@ -252,15 +247,14 @@ fn parse_value_proto(message: &[u8]) -> Option<()> {
                 }
                 other => print!("tensor {{ unexpected[{:?}] }}", other),
             },
-            9 => print!(
-                "metadata: {} ",
-                match key.read(buf)? {
-                    ProtoValue::LengthDelimited(payload) => {
-                        format!("[blob of length {}]", payload.len())
-                    }
-                    other => format!("unexpected[{:?}]", other),
+            9 => match key.read(buf)? {
+                ProtoValue::LengthDelimited(msg) => {
+                    print!("metadata {{ ");
+                    parse_summary_metadata_proto(msg);
+                    print!("}} ");
                 }
-            ),
+                other => print!("metadata {{ unexpected[{:?}] }}", other),
+            },
             n => {
                 print!("field{}[ignored] ", n);
                 key.skip(buf)?;
@@ -322,6 +316,61 @@ fn parse_tensor_proto(message: &[u8]) -> Option<()> {
                 }
                 other => print!("float_val: unexpected[{:?}] }}", other),
             },
+            n => {
+                print!("field{}[ignored] ", n);
+                key.skip(buf)?;
+            }
+        };
+        Some(())
+    }
+}
+
+fn parse_summary_metadata_proto(message: &[u8]) -> Option<()> {
+    // Relevant fields on `SummaryMetadata`:
+    //   PluginData plugin_data = 1;
+    let mut buf: &[u8] = &message[..];
+    while let Some(()) = parse_summary_metadata_field(&mut buf) {}
+    return Some(());
+
+    fn parse_summary_metadata_field(buf: &mut &[u8]) -> Option<()> {
+        let key = ProtoKey::new(read_varu64(buf)?);
+        match key.field_number {
+            1 => match key.read(buf)? {
+                ProtoValue::LengthDelimited(msg) => {
+                    print!("plugin_data {{ ");
+                    parse_plugin_data_proto(msg);
+                    print!("}} ");
+                }
+                other => print!("plugin_data {{ unexpected[{:?}] }}", other),
+            },
+            n => {
+                print!("field{}[ignored] ", n);
+                key.skip(buf)?;
+            }
+        };
+        Some(())
+    }
+}
+
+fn parse_plugin_data_proto(message: &[u8]) -> Option<()> {
+    // Relevant fields on `PluginData`:
+    //   string plugin_name = 1;
+    let mut buf: &[u8] = &message[..];
+    while let Some(()) = parse_plugin_data_field(&mut buf) {}
+    return Some(());
+
+    fn parse_plugin_data_field(buf: &mut &[u8]) -> Option<()> {
+        let key = ProtoKey::new(read_varu64(buf)?);
+        match key.field_number {
+            1 => print!(
+                "plugin_name: {} ",
+                match key.read(buf)? {
+                    ProtoValue::LengthDelimited(payload) => {
+                        format!("{:?}", String::from_utf8_lossy(payload))
+                    }
+                    other => format!("unexpected[{:?}]", other),
+                }
+            ),
             n => {
                 print!("field{}[ignored] ", n);
                 key.skip(buf)?;
