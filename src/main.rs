@@ -184,8 +184,34 @@ fn parse_event_proto(event: &Vec<u8>) {
                     other => format!("unexpected:{:?}", other),
                 }
             ),
-            5 => print!(
-                "summary={} ",
+            5 => match key.read(buf)? {
+                ProtoValue::LengthDelimited(msg) => {
+                    print!("summary=[");
+                    parse_summary_proto(msg);
+                    print!("] ");
+                }
+                other => print!("summary=unexpected:{:?}", other),
+            },
+            n => {
+                print!("field{}[ignored] ", n);
+                key.skip(buf)?;
+            }
+        };
+        Some(())
+    }
+}
+
+fn parse_summary_proto(message: &[u8]) -> Option<()> {
+    let mut buf: &[u8] = &message[..];
+    while let Some(()) = parse_summary_field(&mut buf) {}
+    print!("<end>");
+    return Some(());
+
+    fn parse_summary_field(buf: &mut &[u8]) -> Option<()> {
+        let key = ProtoKey::new(read_varu64(buf)?);
+        match key.field_number {
+            1 => print!(
+                "value={} ",
                 match key.read(buf)? {
                     ProtoValue::LengthDelimited(payload) => {
                         format!("[blob of length {}]", payload.len())
