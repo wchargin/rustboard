@@ -199,9 +199,7 @@ fn parse_event_proto(event: &Vec<u8>, accumulator: &mut ScalarsAccumulator) {
     let mut wall_time: f64 = 0.0;
     let mut step: i64 = 0;
     let mut tag_values: Vec<TagValue> = Vec::new();
-    print!("event {{ ");
     while let Some(()) = parse_event_field(&mut buf, &mut wall_time, &mut step, &mut tag_values) {}
-    println!("}}");
     for tag_value in tag_values.into_iter() {
         accumulator
             .time_series
@@ -230,37 +228,22 @@ fn parse_event_proto(event: &Vec<u8>, accumulator: &mut ScalarsAccumulator) {
             1 => {
                 if let Some(wall_time_bits) = key.read_fixed64(buf) {
                     *wall_time = f64::from_bits(wall_time_bits);
-                    print!("wall_time: {:?} ", wall_time);
                 }
             }
             2 => {
                 if let Some(step_bits) = key.read_varint(buf) {
                     *step = step_bits as i64;
-                    print!("step: {:?} ", step);
-                }
-            }
-            3 => {
-                if let Some(file_version_bits) = key.read_length_delimited(buf) {
-                    print!(
-                        "file_version: {:?} ",
-                        String::from_utf8_lossy(file_version_bits)
-                    );
                 }
             }
             5 => {
                 if let Some(summary_msg) = key.read_length_delimited(buf) {
-                    print!("summary {{ ");
                     match parse_summary_proto(summary_msg) {
                         Some(tvs) => tag_values.extend(tvs.into_iter()),
                         None => (),
                     }
-                    print!("}} ");
                 }
             }
-            n => {
-                print!("field{}[ignored] ", n);
-                key.skip(buf)?;
-            }
+            _ => key.skip(buf)?,
         };
         Some(())
     }
@@ -287,12 +270,9 @@ fn parse_summary_proto(message: &[u8]) -> Option<Vec<TagValue>> {
                     Some(v) => result.push(v),
                     None => (),
                 },
-                other => print!("value {{ unexpected[{:?}] }}", other),
+                _ => (),
             },
-            n => {
-                print!("field{}[ignored] ", n);
-                key.skip(buf)?;
-            }
+            _ => key.skip(buf)?,
         };
         Some(())
     }
@@ -327,43 +307,29 @@ fn parse_value_proto(message: &[u8]) -> Option<TagValue> {
     fn parse_value_field(buf: &mut &[u8], result: &mut PartialTagValue) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
-            1 => print!(
-                "tag: {} ",
-                match key.read(buf)? {
-                    ProtoValue::LengthDelimited(payload) => {
-                        let tag = String::from_utf8_lossy(payload).into_owned();
-                        let fmt = format!("{:?}", tag);
-                        result.tag = Some(TagId(tag));
-                        fmt
-                    }
-                    other => format!("unexpected[{:?}]", other),
+            1 => match key.read(buf)? {
+                ProtoValue::LengthDelimited(payload) => {
+                    let tag = String::from_utf8_lossy(payload).into_owned();
+                    result.tag = Some(TagId(tag));
                 }
-            ),
+                _ => (),
+            },
             8 => match key.read(buf)? {
                 ProtoValue::LengthDelimited(msg) => {
-                    print!("tensor {{ ");
                     result.value = parse_tensor_proto(msg).or(result.value);
-                    print!("}} ");
                 }
-                other => print!("tensor {{ unexpected[{:?}] }}", other),
+                _ => (),
             },
             9 => match key.read(buf)? {
-                ProtoValue::LengthDelimited(msg) => {
-                    print!("metadata {{ ");
-                    match parse_summary_metadata_proto(msg) {
-                        Some(PluginName(ref s)) if s == "scalars" => {
-                            result.from_scalars_plugin = true;
-                        }
-                        _ => (),
+                ProtoValue::LengthDelimited(msg) => match parse_summary_metadata_proto(msg) {
+                    Some(PluginName(ref s)) if s == "scalars" => {
+                        result.from_scalars_plugin = true;
                     }
-                    print!("}} ");
-                }
-                other => print!("metadata {{ unexpected[{:?}] }}", other),
+                    _ => (),
+                },
+                _ => (),
             },
-            n => {
-                print!("field{}[ignored] ", n);
-                key.skip(buf)?;
-            }
+            _ => key.skip(buf)?,
         };
         Some(())
     }
@@ -379,55 +345,33 @@ fn parse_tensor_proto(message: &[u8]) -> Option<f32> {
     //   DataType dtype = 1;
     //   TensorShapeProto tensor_shape = 2;
     //   bytes tensor_content = 4;
-    //   repeated double double_val = 6 [packed = true];
+    //   repeated float float_val = 5 [packed = true];
     // On `DataType`:
     //   DT_FLOAT = 1;
     //   DT_DOUBLE = 2;
     fn parse_tensor_field(buf: &mut &[u8], result: &mut Option<f32>) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
-            1 => print!(
-                "dtype: {} ",
-                match key.read(buf)? {
-                    ProtoValue::Varint(n) => match n {
-                        1 => "DT_FLOAT".to_string(),
-                        2 => "DT_DOUBLE".to_string(),
-                        n => format!("{}", n),
-                    },
-                    other => format!("unexpected[{:?}]", other),
-                }
-            ),
-            2 => {
-                print!("tensor_shape {{ /* ignored */ }} ");
-                key.skip(buf)?;
-            }
             4 => match key.read(buf)? {
                 ProtoValue::LengthDelimited(msg) => {
-                    print!("tensor_content: [ ");
                     // Interpret as f32s.
                     for chunk in msg.chunks_exact(4) {
                         let val = f32::from_bits(LittleEndian::read_u32(chunk));
-                        print!("{} ", val);
                         *result = Some(val);
                     }
-                    print!("] ");
                 }
-                other => print!("tensor_content: unexpected[{:?}] }}", other),
+                _ => (),
             },
             5 => match key.read(buf)? {
                 ProtoValue::LengthDelimited(msg) => {
                     for chunk in msg.chunks_exact(4) {
                         let val = f32::from_bits(LittleEndian::read_u32(chunk));
-                        print!("float_val: {} ", val);
                         *result = Some(val);
                     }
                 }
-                other => print!("float_val: unexpected[{:?}] }}", other),
+                _ => (),
             },
-            n => {
-                print!("field{}[ignored] ", n);
-                key.skip(buf)?;
-            }
+            _ => key.skip(buf)?,
         };
         Some(())
     }
@@ -450,20 +394,13 @@ fn parse_summary_metadata_proto(message: &[u8]) -> Option<PluginName> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
             1 => match key.read(buf)? {
-                ProtoValue::LengthDelimited(msg) => {
-                    print!("plugin_data {{ ");
-                    match parse_plugin_data_proto(msg) {
-                        Some(v) => *plugin_name = Some(v),
-                        None => (),
-                    }
-                    print!("}} ");
-                }
-                other => print!("plugin_data {{ unexpected[{:?}] }}", other),
+                ProtoValue::LengthDelimited(msg) => match parse_plugin_data_proto(msg) {
+                    Some(v) => *plugin_name = Some(v),
+                    None => (),
+                },
+                _ => (),
             },
-            n => {
-                print!("field{}[ignored] ", n);
-                key.skip(buf)?;
-            }
+            _ => key.skip(buf)?,
         };
         Some(())
     }
@@ -480,22 +417,14 @@ fn parse_plugin_data_proto(message: &[u8]) -> Option<PluginName> {
     fn parse_plugin_data_field(buf: &mut &[u8], result: &mut Option<PluginName>) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
-            1 => print!(
-                "plugin_name: {} ",
-                match key.read(buf)? {
-                    ProtoValue::LengthDelimited(payload) => {
-                        let name = String::from_utf8_lossy(payload).into_owned();
-                        let fmt = format!("{:?}", name);
-                        *result = Some(PluginName(name));
-                        format!("{}", fmt)
-                    }
-                    other => format!("unexpected[{:?}]", other),
+            1 => match key.read(buf)? {
+                ProtoValue::LengthDelimited(payload) => {
+                    let name = String::from_utf8_lossy(payload).into_owned();
+                    *result = Some(PluginName(name));
                 }
-            ),
-            n => {
-                print!("field{}[ignored] ", n);
-                key.skip(buf)?;
-            }
+                _ => (),
+            },
+            _ => key.skip(buf)?,
         };
         Some(())
     }
