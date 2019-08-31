@@ -265,13 +265,11 @@ fn parse_summary_proto(message: &[u8]) -> Option<Vec<TagValue>> {
     fn parse_summary_field(buf: &mut &[u8], result: &mut Vec<TagValue>) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
-            1 => match key.read(buf)? {
-                ProtoValue::LengthDelimited(msg) => match parse_value_proto(msg) {
-                    Some(v) => result.push(v),
-                    None => (),
-                },
-                _ => (),
-            },
+            1 => {
+                if let Some(value_msg) = key.read_length_delimited(buf) {
+                    result.extend(parse_value_proto(value_msg).into_iter())
+                }
+            }
             _ => key.skip(buf)?,
         };
         Some(())
@@ -307,28 +305,27 @@ fn parse_value_proto(message: &[u8]) -> Option<TagValue> {
     fn parse_value_field(buf: &mut &[u8], result: &mut PartialTagValue) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
-            1 => match key.read(buf)? {
-                ProtoValue::LengthDelimited(payload) => {
-                    let tag = String::from_utf8_lossy(payload).into_owned();
+            1 => {
+                if let Some(tag_bytes) = key.read_length_delimited(buf) {
+                    let tag = String::from_utf8_lossy(tag_bytes).into_owned();
                     result.tag = Some(TagId(tag));
                 }
-                _ => (),
-            },
-            8 => match key.read(buf)? {
-                ProtoValue::LengthDelimited(msg) => {
-                    result.value = parse_tensor_proto(msg).or(result.value);
+            }
+            8 => {
+                if let Some(tensor_msg) = key.read_length_delimited(buf) {
+                    result.value = parse_tensor_proto(tensor_msg).or(result.value);
                 }
-                _ => (),
-            },
-            9 => match key.read(buf)? {
-                ProtoValue::LengthDelimited(msg) => match parse_summary_metadata_proto(msg) {
-                    Some(PluginName(ref s)) if s == "scalars" => {
-                        result.from_scalars_plugin = true;
+            }
+            9 => {
+                if let Some(metadata_msg) = key.read_length_delimited(buf) {
+                    match parse_summary_metadata_proto(metadata_msg) {
+                        Some(PluginName(ref s)) if s == "scalars" => {
+                            result.from_scalars_plugin = true;
+                        }
+                        _ => (),
                     }
-                    _ => (),
-                },
-                _ => (),
-            },
+                }
+            }
             _ => key.skip(buf)?,
         };
         Some(())
@@ -352,25 +349,18 @@ fn parse_tensor_proto(message: &[u8]) -> Option<f32> {
     fn parse_tensor_field(buf: &mut &[u8], result: &mut Option<f32>) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
-            4 => match key.read(buf)? {
-                ProtoValue::LengthDelimited(msg) => {
+            4 | 5 => {
+                // Field 4 is `tensor_content`, which we're assuming has DT_FLOAT data; field 5 is
+                // packed `float_val`, so these two fields have the same representation and
+                // interpretation.
+                if let Some(tensor_content_bits) = key.read_length_delimited(buf) {
                     // Interpret as f32s.
-                    for chunk in msg.chunks_exact(4) {
+                    for chunk in tensor_content_bits.chunks_exact(4) {
                         let val = f32::from_bits(LittleEndian::read_u32(chunk));
                         *result = Some(val);
                     }
                 }
-                _ => (),
-            },
-            5 => match key.read(buf)? {
-                ProtoValue::LengthDelimited(msg) => {
-                    for chunk in msg.chunks_exact(4) {
-                        let val = f32::from_bits(LittleEndian::read_u32(chunk));
-                        *result = Some(val);
-                    }
-                }
-                _ => (),
-            },
+            }
             _ => key.skip(buf)?,
         };
         Some(())
@@ -393,13 +383,14 @@ fn parse_summary_metadata_proto(message: &[u8]) -> Option<PluginName> {
     ) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
-            1 => match key.read(buf)? {
-                ProtoValue::LengthDelimited(msg) => match parse_plugin_data_proto(msg) {
-                    Some(v) => *plugin_name = Some(v),
-                    None => (),
-                },
-                _ => (),
-            },
+            1 => {
+                if let Some(plugin_data_msg) = key.read_length_delimited(buf) {
+                    match parse_plugin_data_proto(plugin_data_msg) {
+                        Some(v) => *plugin_name = Some(v),
+                        None => (),
+                    }
+                }
+            }
             _ => key.skip(buf)?,
         };
         Some(())
@@ -417,13 +408,12 @@ fn parse_plugin_data_proto(message: &[u8]) -> Option<PluginName> {
     fn parse_plugin_data_field(buf: &mut &[u8], result: &mut Option<PluginName>) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
-            1 => match key.read(buf)? {
-                ProtoValue::LengthDelimited(payload) => {
-                    let name = String::from_utf8_lossy(payload).into_owned();
+            1 => {
+                if let Some(plugin_name_bits) = key.read_length_delimited(buf) {
+                    let name = String::from_utf8_lossy(plugin_name_bits).into_owned();
                     *result = Some(PluginName(name));
                 }
-                _ => (),
-            },
+            }
             _ => key.skip(buf)?,
         };
         Some(())
