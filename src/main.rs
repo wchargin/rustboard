@@ -70,8 +70,35 @@ fn parse_event_proto(event: &Vec<u8>) {
     // On `Tensor`:
     //   repeated double double_val = 6 [packed = true];
     let mut it = event.iter().copied();
-    while let Some(i) = read_varu64(&mut it) {
-        print!("{} ", i);
+    while let Some(key) = read_varu64(&mut it) {
+        let wire_type = key & 0b111;
+        let field_number = (key & !0b111) >> 3;
+        match wire_type {
+            0 => {
+                // varint
+                read_varu64(&mut it);
+            }
+            1 => {
+                // 64-bit
+                for _ in 0..8 {
+                    it.next();
+                }
+            }
+            5 => {
+                // 32-bit
+                for _ in 0..4 {
+                    it.next();
+                }
+            }
+            2 => {
+                // length-delimited
+                for _ in 0..read_varu64(&mut it).unwrap() {
+                    it.next();
+                }
+            }
+            n => unimplemented!("wire type format {}", n),
+        }
+        print!("f#{}[wt={}] ", field_number, wire_type);
     }
     println!("<end>");
 }
