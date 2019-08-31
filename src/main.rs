@@ -137,49 +137,6 @@ enum ProtoValue<'a> {
     LengthDelimited(&'a [u8]),
 }
 
-fn parse_event_field(buf: &mut &[u8]) -> Option<()> {
-    let key = ProtoKey::new(read_varu64(buf)?);
-    match key.field_number {
-        1 => print!(
-            "wall_time={} ",
-            match key.read(buf)? {
-                ProtoValue::Fixed64(n) => format!("{:?}", f64::from_bits(n)),
-                other => format!("unexpected:{:?}", other),
-            }
-        ),
-        2 => print!(
-            "step={} ",
-            match key.read(buf)? {
-                ProtoValue::Varint(n) => format!("{:?}", n as i64),
-                other => format!("unexpected:{:?}", other),
-            }
-        ),
-        3 => print!(
-            "file_version={} ",
-            match key.read(buf)? {
-                ProtoValue::LengthDelimited(payload) => {
-                    format!("{:?}", String::from_utf8_lossy(payload))
-                }
-                other => format!("unexpected:{:?}", other),
-            }
-        ),
-        5 => print!(
-            "summary={} ",
-            match key.read(buf)? {
-                ProtoValue::LengthDelimited(payload) => {
-                    format!("[blob of length {}]", payload.len())
-                }
-                other => format!("unexpected:{:?}", other),
-            }
-        ),
-        n => {
-            print!("field{}[ignored] ", n);
-            key.skip(buf)?;
-        }
-    };
-    Some(())
-}
-
 fn parse_event_proto(event: &Vec<u8>) {
     // Relevant fields on proto `Event`:
     //   double wall_time = 1;
@@ -200,6 +157,49 @@ fn parse_event_proto(event: &Vec<u8>) {
     let mut buf: &[u8] = &event[..];
     while let Some(()) = parse_event_field(&mut buf) {}
     println!("<end>");
+
+    fn parse_event_field(buf: &mut &[u8]) -> Option<()> {
+        let key = ProtoKey::new(read_varu64(buf)?);
+        match key.field_number {
+            1 => print!(
+                "wall_time={} ",
+                match key.read(buf)? {
+                    ProtoValue::Fixed64(n) => format!("{:?}", f64::from_bits(n)),
+                    other => format!("unexpected:{:?}", other),
+                }
+            ),
+            2 => print!(
+                "step={} ",
+                match key.read(buf)? {
+                    ProtoValue::Varint(n) => format!("{:?}", n as i64),
+                    other => format!("unexpected:{:?}", other),
+                }
+            ),
+            3 => print!(
+                "file_version={} ",
+                match key.read(buf)? {
+                    ProtoValue::LengthDelimited(payload) => {
+                        format!("{:?}", String::from_utf8_lossy(payload))
+                    }
+                    other => format!("unexpected:{:?}", other),
+                }
+            ),
+            5 => print!(
+                "summary={} ",
+                match key.read(buf)? {
+                    ProtoValue::LengthDelimited(payload) => {
+                        format!("[blob of length {}]", payload.len())
+                    }
+                    other => format!("unexpected:{:?}", other),
+                }
+            ),
+            n => {
+                print!("field{}[ignored] ", n);
+                key.skip(buf)?;
+            }
+        };
+        Some(())
+    }
 }
 
 fn read_varu64(buf: &mut &[u8]) -> Option<u64> {
