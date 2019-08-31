@@ -139,16 +139,10 @@ enum ProtoValue<'a> {
 
 fn parse_event_proto(event: &Vec<u8>) {
     // Fields of messages that we don't yet parse:
-    // On `Value`:
-    //   string tag = 1;
-    //   SummaryMetadata metadata = 9;
-    //   TensorProto tensor = 8;
     // On `SummaryMetadata`:
     //   PluginData plugin_data = 1;
     // On `PluginData`:
     //   string plugin_name = 1;
-    // On `Tensor`:
-    //   repeated double double_val = 6 [packed = true];
     let mut buf: &[u8] = &event[..];
     print!("event {{ ");
     while let Some(()) = parse_event_field(&mut buf) {}
@@ -212,8 +206,54 @@ fn parse_summary_proto(message: &[u8]) -> Option<()> {
     fn parse_summary_field(buf: &mut &[u8]) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
+            1 => match key.read(buf)? {
+                ProtoValue::LengthDelimited(msg) => {
+                    print!("value {{ ");
+                    parse_value_proto(msg);
+                    print!("}} ");
+                }
+                other => print!("value {{ unexpected[{:?}] }}", other),
+            },
+            n => {
+                print!("field{}[ignored] ", n);
+                key.skip(buf)?;
+            }
+        };
+        Some(())
+    }
+}
+
+fn parse_value_proto(message: &[u8]) -> Option<()> {
+    let mut buf: &[u8] = &message[..];
+    while let Some(()) = parse_value_field(&mut buf) {}
+    return Some(());
+
+    // Relevant fields on `Value`:
+    //   string tag = 1;
+    //   SummaryMetadata metadata = 9;
+    //   TensorProto tensor = 8;
+    fn parse_value_field(buf: &mut &[u8]) -> Option<()> {
+        let key = ProtoKey::new(read_varu64(buf)?);
+        match key.field_number {
             1 => print!(
-                "value: {} ",
+                "tag: {} ",
+                match key.read(buf)? {
+                    ProtoValue::LengthDelimited(payload) => {
+                        format!("{:?}", String::from_utf8_lossy(payload))
+                    }
+                    other => format!("unexpected[{:?}]", other),
+                }
+            ),
+            8 => match key.read(buf)? {
+                ProtoValue::LengthDelimited(msg) => {
+                    print!("tensor {{ ");
+                    parse_tensor_proto(msg);
+                    print!("}} ");
+                }
+                other => print!("tensor {{ unexpected[{:?}] }}", other),
+            },
+            9 => print!(
+                "metadata: {} ",
                 match key.read(buf)? {
                     ProtoValue::LengthDelimited(payload) => {
                         format!("[blob of length {}]", payload.len())
@@ -221,6 +261,67 @@ fn parse_summary_proto(message: &[u8]) -> Option<()> {
                     other => format!("unexpected[{:?}]", other),
                 }
             ),
+            n => {
+                print!("field{}[ignored] ", n);
+                key.skip(buf)?;
+            }
+        };
+        Some(())
+    }
+}
+
+fn parse_tensor_proto(message: &[u8]) -> Option<()> {
+    let mut buf: &[u8] = &message[..];
+    while let Some(()) = parse_tensor_field(&mut buf) {}
+    return Some(());
+
+    // On `Tensor`:
+    //   DataType dtype = 1;
+    //   TensorShapeProto tensor_shape = 2;
+    //   bytes tensor_content = 4;
+    //   repeated double double_val = 6 [packed = true];
+    // On `DataType`:
+    //   DT_FLOAT = 1;
+    //   DT_DOUBLE = 2;
+    fn parse_tensor_field(buf: &mut &[u8]) -> Option<()> {
+        let key = ProtoKey::new(read_varu64(buf)?);
+        match key.field_number {
+            1 => print!(
+                "dtype: {} ",
+                match key.read(buf)? {
+                    ProtoValue::Varint(n) => match n {
+                        1 => "DT_FLOAT".to_string(),
+                        2 => "DT_DOUBLE".to_string(),
+                        n => format!("{}", n),
+                    },
+                    other => format!("unexpected[{:?}]", other),
+                }
+            ),
+            2 => {
+                print!("tensor_shape {{ /* ignored */ }} ");
+                key.skip(buf)?;
+            }
+            4 => match key.read(buf)? {
+                ProtoValue::LengthDelimited(msg) => {
+                    print!("tensor_content: [ ");
+                    // Interpret as f32s.
+                    for chunk in msg.chunks_exact(4) {
+                        let val = f32::from_bits(LittleEndian::read_u32(chunk));
+                        print!("{} ", val);
+                    }
+                    print!("] ");
+                }
+                other => print!("tensor_content: unexpected[{:?}] }}", other),
+            },
+            5 => match key.read(buf)? {
+                ProtoValue::LengthDelimited(msg) => {
+                    for chunk in msg.chunks_exact(4) {
+                        let val = f32::from_bits(LittleEndian::read_u32(chunk));
+                        print!("float_val: {} ", val);
+                    }
+                }
+                other => print!("float_val: unexpected[{:?}] }}", other),
+            },
             n => {
                 print!("field{}[ignored] ", n);
                 key.skip(buf)?;
