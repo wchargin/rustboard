@@ -48,12 +48,13 @@ struct ScalarsAccumulator {
 }
 
 fn read_events(filename: &str) -> io::Result<ScalarsAccumulator> {
-    let mut file = File::open(filename)?;
+    let file = File::open(filename)?;
+    let mut reader = io::BufReader::new(file);
     let mut result = ScalarsAccumulator {
         time_series: HashMap::new(),
     };
     loop {
-        match read_event(&mut file) {
+        match read_event(&mut reader) {
             Ok(block) => parse_event_proto(&block, &mut result),
             Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
             Err(e) => return Err(e),
@@ -63,7 +64,7 @@ fn read_events(filename: &str) -> io::Result<ScalarsAccumulator> {
 }
 
 /// Returns the read TF record, if possible.
-fn read_event(f: &mut File) -> io::Result<Vec<u8>> {
+fn read_event<R: Read>(f: &mut R) -> io::Result<Vec<u8>> {
     // From TensorFlow `record_writer.cc` comments:
     // Format of a single record:
     //  uint64    length
