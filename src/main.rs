@@ -21,11 +21,14 @@ fn main() {
         eprintln!("error: {:?}", e);
         std::process::exit(1);
     });
-    for (tag, points) in accumulator.time_series.iter() {
-        println!();
-        println!("=== {:?} ===", tag);
-        for pt in points.iter() {
-            println!("({}, {}) @ {}", pt.step, pt.value, pt.wall_time);
+    let stdout = io::stdout();
+    let mut handle = io::BufWriter::new(stdout.lock());
+    for (tag, points) in accumulator.time_series {
+        use std::io::Write;
+        writeln!(handle).unwrap();
+        writeln!(handle, "=== {:?} ===", tag).unwrap();
+        for pt in points {
+            writeln!(handle, "({}, {}) @ {}", pt.step, pt.value, pt.wall_time).unwrap();
         }
     }
 }
