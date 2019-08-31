@@ -138,12 +138,7 @@ enum ProtoValue<'a> {
 }
 
 fn parse_event_proto(event: &Vec<u8>) {
-    // Relevant fields on proto `Event`:
-    //   double wall_time = 1;
-    //   int64 step = 2;
-    //   Summary summary = 5;
-    // On `Summary`:
-    //   repeated Value value = 1;
+    // Fields of messages that we don't yet parse:
     // On `Value`:
     //   string tag = 1;
     //   SummaryMetadata metadata = 9;
@@ -159,6 +154,11 @@ fn parse_event_proto(event: &Vec<u8>) {
     while let Some(()) = parse_event_field(&mut buf) {}
     println!("}}");
 
+    // Relevant fields on `Event`:
+    //   double wall_time = 1;
+    //   int64 step = 2;
+    //   string file_version = 3;
+    //   Summary summary = 5;
     fn parse_event_field(buf: &mut &[u8]) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
@@ -207,6 +207,8 @@ fn parse_summary_proto(message: &[u8]) -> Option<()> {
     while let Some(()) = parse_summary_field(&mut buf) {}
     return Some(());
 
+    // Relevant fields on `Summary`:
+    //   repeated Value value = 1;
     fn parse_summary_field(buf: &mut &[u8]) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
