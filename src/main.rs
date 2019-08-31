@@ -1,4 +1,5 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
+use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io;
@@ -16,22 +17,49 @@ fn main() {
         std::process::exit(1);
     };
     println!("Processing file: {}", events_file);
-    read_events(events_file).unwrap_or_else(|e| {
+    let accumulator = read_events(events_file).unwrap_or_else(|e| {
         eprintln!("error: {:?}", e);
         std::process::exit(1);
     });
+    for (tag, points) in accumulator.time_series.iter() {
+        println!();
+        println!("=== {:?} ===", tag);
+        for pt in points.iter() {
+            println!("({}, {}) @ {}", pt.step, pt.value, pt.wall_time);
+        }
+    }
 }
 
-fn read_events(filename: &str) -> io::Result<()> {
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct TagId(String);
+
+#[derive(Debug, PartialEq)]
+struct ScalarPoint {
+    /// Step index: unique non-negative key for this datum within its time series.
+    step: i64,
+    /// Wall time that the event was recorded, as seconds since epoch.
+    wall_time: f64,
+    /// Scalar value.
+    value: f32,
+}
+
+struct ScalarsAccumulator {
+    time_series: HashMap<TagId, Vec<ScalarPoint>>,
+}
+
+fn read_events(filename: &str) -> io::Result<ScalarsAccumulator> {
     let mut file = File::open(filename)?;
+    let mut result = ScalarsAccumulator {
+        time_series: HashMap::new(),
+    };
     loop {
         match read_event(&mut file) {
-            Ok(block) => parse_event_proto(&block),
+            Ok(block) => parse_event_proto(&block, &mut result),
             Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
             Err(e) => return Err(e),
         }
     }
-    Ok(())
+    Ok(result)
 }
 
 /// Returns the read TF record, if possible.
@@ -137,31 +165,58 @@ enum ProtoValue<'a> {
     LengthDelimited(&'a [u8]),
 }
 
-fn parse_event_proto(event: &Vec<u8>) {
+fn parse_event_proto(event: &Vec<u8>, accumulator: &mut ScalarsAccumulator) {
     let mut buf: &[u8] = &event[..];
+    let mut wall_time: f64 = 0.0;
+    let mut step: i64 = 0;
+    let mut tag_values: Vec<TagValue> = Vec::new();
     print!("event {{ ");
-    while let Some(()) = parse_event_field(&mut buf) {}
+    while let Some(()) = parse_event_field(&mut buf, &mut wall_time, &mut step, &mut tag_values) {}
     println!("}}");
+    for tag_value in tag_values.into_iter() {
+        accumulator
+            .time_series
+            .entry(tag_value.tag)
+            .or_default()
+            .push(ScalarPoint {
+                step,
+                wall_time,
+                value: tag_value.value,
+            })
+    }
 
     // Relevant fields on `Event`:
     //   double wall_time = 1;
     //   int64 step = 2;
     //   string file_version = 3;
     //   Summary summary = 5;
-    fn parse_event_field(buf: &mut &[u8]) -> Option<()> {
+    fn parse_event_field(
+        buf: &mut &[u8],
+        wall_time: &mut f64,
+        step: &mut i64,
+        tag_values: &mut Vec<TagValue>,
+    ) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
             1 => print!(
                 "wall_time: {} ",
                 match key.read(buf)? {
-                    ProtoValue::Fixed64(n) => format!("{:?}", f64::from_bits(n)),
+                    ProtoValue::Fixed64(n) => {
+                        let value = f64::from_bits(n);
+                        *wall_time = value;
+                        format!("{:?}", value)
+                    }
                     other => format!("unexpected[{:?}]", other),
                 }
             ),
             2 => print!(
                 "step: {} ",
                 match key.read(buf)? {
-                    ProtoValue::Varint(n) => format!("{:?}", n as i64),
+                    ProtoValue::Varint(n) => {
+                        let value = n as i64;
+                        *step = value;
+                        format!("{:?}", value)
+                    }
                     other => format!("unexpected[{:?}]", other),
                 }
             ),
@@ -177,7 +232,10 @@ fn parse_event_proto(event: &Vec<u8>) {
             5 => match key.read(buf)? {
                 ProtoValue::LengthDelimited(msg) => {
                     print!("summary {{ ");
-                    parse_summary_proto(msg);
+                    match parse_summary_proto(msg) {
+                        Some(tvs) => tag_values.extend(tvs.into_iter()),
+                        None => (),
+                    }
                     print!("}} ");
                 }
                 other => print!("summary {{ unexpected[{:?}] }}", other),
@@ -191,22 +249,27 @@ fn parse_event_proto(event: &Vec<u8>) {
     }
 }
 
-fn parse_summary_proto(message: &[u8]) -> Option<()> {
+struct TagValue {
+    tag: TagId,
+    value: f32,
+}
+
+fn parse_summary_proto(message: &[u8]) -> Option<Vec<TagValue>> {
     let mut buf: &[u8] = &message[..];
-    while let Some(()) = parse_summary_field(&mut buf) {}
-    return Some(());
+    let mut result = Vec::new();
+    while let Some(()) = parse_summary_field(&mut buf, &mut result) {}
+    return Some(result);
 
     // Relevant fields on `Summary`:
     //   repeated Value value = 1;
-    fn parse_summary_field(buf: &mut &[u8]) -> Option<()> {
+    fn parse_summary_field(buf: &mut &[u8], result: &mut Vec<TagValue>) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
             1 => match key.read(buf)? {
-                ProtoValue::LengthDelimited(msg) => {
-                    print!("value {{ ");
-                    parse_value_proto(msg);
-                    print!("}} ");
-                }
+                ProtoValue::LengthDelimited(msg) => match parse_value_proto(msg) {
+                    Some(v) => result.push(v),
+                    None => (),
+                },
                 other => print!("value {{ unexpected[{:?}] }}", other),
             },
             n => {
@@ -218,23 +281,43 @@ fn parse_summary_proto(message: &[u8]) -> Option<()> {
     }
 }
 
-fn parse_value_proto(message: &[u8]) -> Option<()> {
+fn parse_value_proto(message: &[u8]) -> Option<TagValue> {
     let mut buf: &[u8] = &message[..];
-    while let Some(()) = parse_value_field(&mut buf) {}
-    return Some(());
+    struct PartialTagValue {
+        tag: Option<TagId>,
+        value: Option<f32>,
+        from_scalars_plugin: bool,
+    }
+    let mut result = PartialTagValue {
+        tag: None,
+        value: None,
+        from_scalars_plugin: false,
+    };
+    while let Some(()) = parse_value_field(&mut buf, &mut result) {}
+    return match result {
+        PartialTagValue {
+            tag: Some(tag),
+            value: Some(value),
+            from_scalars_plugin: true,
+        } => Some(TagValue { tag, value }),
+        _ => None,
+    };
 
     // Relevant fields on `Value`:
     //   string tag = 1;
     //   SummaryMetadata metadata = 9;
     //   TensorProto tensor = 8;
-    fn parse_value_field(buf: &mut &[u8]) -> Option<()> {
+    fn parse_value_field(buf: &mut &[u8], result: &mut PartialTagValue) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
             1 => print!(
                 "tag: {} ",
                 match key.read(buf)? {
                     ProtoValue::LengthDelimited(payload) => {
-                        format!("{:?}", String::from_utf8_lossy(payload))
+                        let tag = String::from_utf8_lossy(payload).into_owned();
+                        let fmt = format!("{:?}", tag);
+                        result.tag = Some(TagId(tag));
+                        fmt
                     }
                     other => format!("unexpected[{:?}]", other),
                 }
@@ -242,7 +325,7 @@ fn parse_value_proto(message: &[u8]) -> Option<()> {
             8 => match key.read(buf)? {
                 ProtoValue::LengthDelimited(msg) => {
                     print!("tensor {{ ");
-                    parse_tensor_proto(msg);
+                    result.value = parse_tensor_proto(msg).or(result.value);
                     print!("}} ");
                 }
                 other => print!("tensor {{ unexpected[{:?}] }}", other),
@@ -250,7 +333,12 @@ fn parse_value_proto(message: &[u8]) -> Option<()> {
             9 => match key.read(buf)? {
                 ProtoValue::LengthDelimited(msg) => {
                     print!("metadata {{ ");
-                    parse_summary_metadata_proto(msg);
+                    match parse_summary_metadata_proto(msg) {
+                        Some(PluginName(ref s)) if s == "scalars" => {
+                            result.from_scalars_plugin = true;
+                        }
+                        _ => (),
+                    }
                     print!("}} ");
                 }
                 other => print!("metadata {{ unexpected[{:?}] }}", other),
@@ -264,10 +352,11 @@ fn parse_value_proto(message: &[u8]) -> Option<()> {
     }
 }
 
-fn parse_tensor_proto(message: &[u8]) -> Option<()> {
+fn parse_tensor_proto(message: &[u8]) -> Option<f32> {
     let mut buf: &[u8] = &message[..];
-    while let Some(()) = parse_tensor_field(&mut buf) {}
-    return Some(());
+    let mut result: Option<f32> = None;
+    while let Some(()) = parse_tensor_field(&mut buf, &mut result) {}
+    return result;
 
     // On `Tensor`:
     //   DataType dtype = 1;
@@ -277,7 +366,7 @@ fn parse_tensor_proto(message: &[u8]) -> Option<()> {
     // On `DataType`:
     //   DT_FLOAT = 1;
     //   DT_DOUBLE = 2;
-    fn parse_tensor_field(buf: &mut &[u8]) -> Option<()> {
+    fn parse_tensor_field(buf: &mut &[u8], result: &mut Option<f32>) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
             1 => print!(
@@ -302,6 +391,7 @@ fn parse_tensor_proto(message: &[u8]) -> Option<()> {
                     for chunk in msg.chunks_exact(4) {
                         let val = f32::from_bits(LittleEndian::read_u32(chunk));
                         print!("{} ", val);
+                        *result = Some(val);
                     }
                     print!("] ");
                 }
@@ -312,6 +402,7 @@ fn parse_tensor_proto(message: &[u8]) -> Option<()> {
                     for chunk in msg.chunks_exact(4) {
                         let val = f32::from_bits(LittleEndian::read_u32(chunk));
                         print!("float_val: {} ", val);
+                        *result = Some(val);
                     }
                 }
                 other => print!("float_val: unexpected[{:?}] }}", other),
@@ -325,20 +416,29 @@ fn parse_tensor_proto(message: &[u8]) -> Option<()> {
     }
 }
 
-fn parse_summary_metadata_proto(message: &[u8]) -> Option<()> {
+struct PluginName(String);
+
+fn parse_summary_metadata_proto(message: &[u8]) -> Option<PluginName> {
     // Relevant fields on `SummaryMetadata`:
     //   PluginData plugin_data = 1;
     let mut buf: &[u8] = &message[..];
-    while let Some(()) = parse_summary_metadata_field(&mut buf) {}
-    return Some(());
+    let mut plugin_name: Option<PluginName> = None;
+    while let Some(()) = parse_summary_metadata_field(&mut buf, &mut plugin_name) {}
+    return plugin_name;
 
-    fn parse_summary_metadata_field(buf: &mut &[u8]) -> Option<()> {
+    fn parse_summary_metadata_field(
+        buf: &mut &[u8],
+        plugin_name: &mut Option<PluginName>,
+    ) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
             1 => match key.read(buf)? {
                 ProtoValue::LengthDelimited(msg) => {
                     print!("plugin_data {{ ");
-                    parse_plugin_data_proto(msg);
+                    match parse_plugin_data_proto(msg) {
+                        Some(v) => *plugin_name = Some(v),
+                        None => (),
+                    }
                     print!("}} ");
                 }
                 other => print!("plugin_data {{ unexpected[{:?}] }}", other),
@@ -352,21 +452,25 @@ fn parse_summary_metadata_proto(message: &[u8]) -> Option<()> {
     }
 }
 
-fn parse_plugin_data_proto(message: &[u8]) -> Option<()> {
+fn parse_plugin_data_proto(message: &[u8]) -> Option<PluginName> {
     // Relevant fields on `PluginData`:
     //   string plugin_name = 1;
     let mut buf: &[u8] = &message[..];
-    while let Some(()) = parse_plugin_data_field(&mut buf) {}
-    return Some(());
+    let mut result: Option<PluginName> = None;
+    while let Some(()) = parse_plugin_data_field(&mut buf, &mut result) {}
+    return result;
 
-    fn parse_plugin_data_field(buf: &mut &[u8]) -> Option<()> {
+    fn parse_plugin_data_field(buf: &mut &[u8], result: &mut Option<PluginName>) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
             1 => print!(
                 "plugin_name: {} ",
                 match key.read(buf)? {
                     ProtoValue::LengthDelimited(payload) => {
-                        format!("{:?}", String::from_utf8_lossy(payload))
+                        let name = String::from_utf8_lossy(payload).into_owned();
+                        let fmt = format!("{:?}", name);
+                        *result = Some(PluginName(name));
+                        format!("{}", fmt)
                     }
                     other => format!("unexpected[{:?}]", other),
                 }
