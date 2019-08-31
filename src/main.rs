@@ -1,4 +1,4 @@
-use byteorder::{LittleEndian, ReadBytesExt};
+use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use std::env;
 use std::fs::File;
 use std::io;
@@ -52,6 +52,134 @@ fn read_event(f: &mut File) -> io::Result<Vec<u8>> {
     Ok(buf)
 }
 
+struct ProtoKey {
+    field_number: u64,
+    _wire_type: WireType,
+}
+
+enum WireType {
+    Varint,
+    Fixed64,
+    Fixed32,
+    LengthDelimited,
+}
+
+impl ProtoKey {
+    fn new(key: u64) -> ProtoKey {
+        ProtoKey {
+            field_number: (key & !0b111) >> 3,
+            _wire_type: match key & 0b111 {
+                0 => WireType::Varint,
+                1 => WireType::Fixed64,
+                2 => WireType::LengthDelimited,
+                5 => WireType::Fixed32, // three, sir
+                n => unimplemented!("wire type {}", n),
+            },
+        }
+    }
+    fn _skip_length(buf: &mut &[u8], n: usize) -> Option<()> {
+        *buf = buf.get(n..)?;
+        Some(())
+    }
+    fn skip(&self, buf: &mut &[u8]) -> Option<()> {
+        match &self._wire_type {
+            WireType::Varint => {
+                read_varu64(buf)?;
+                Some(())
+            }
+            WireType::LengthDelimited => {
+                let len = read_varu64(buf)?;
+                ProtoKey::_skip_length(buf, len as usize)
+            }
+            WireType::Fixed64 => ProtoKey::_skip_length(buf, 8),
+            WireType::Fixed32 => ProtoKey::_skip_length(buf, 4),
+        }
+    }
+    fn read<'a>(&self, buf: &mut &'a [u8]) -> Option<ProtoValue<'a>> {
+        match &self._wire_type {
+            WireType::Varint => Some(ProtoValue::Varint(read_varu64(buf)?)),
+            WireType::Fixed64 => {
+                if buf.len() < 8 {
+                    None
+                } else {
+                    let result = LittleEndian::read_u64(buf);
+                    ProtoKey::_skip_length(buf, 8);
+                    Some(ProtoValue::Fixed64(result))
+                }
+            }
+            WireType::Fixed32 => {
+                if buf.len() < 4 {
+                    None
+                } else {
+                    let result = LittleEndian::read_u32(buf);
+                    ProtoKey::_skip_length(buf, 4);
+                    Some(ProtoValue::Fixed32(result))
+                }
+            }
+            WireType::LengthDelimited => {
+                let len = read_varu64(buf)? as usize;
+                if buf.len() < len {
+                    return None;
+                }
+                let (value, rest) = buf.split_at(len);
+                *buf = rest;
+                Some(ProtoValue::LengthDelimited(value))
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ProtoValue<'a> {
+    Varint(u64),
+    Fixed64(u64),
+    Fixed32(u32),
+    LengthDelimited(&'a [u8]),
+}
+
+fn parse_event_field(buf: &mut &[u8]) -> Option<()> {
+    let key = ProtoKey::new(read_varu64(buf)?);
+    match key.field_number {
+        1 => print!(
+            "wall_time={} ",
+            match key.read(buf)? {
+                ProtoValue::Fixed64(n) => format!("{:?}", f64::from_bits(n)),
+                other => format!("unexpected:{:?}", other),
+            }
+        ),
+        2 => print!(
+            "step={} ",
+            match key.read(buf)? {
+                ProtoValue::Varint(n) => format!("{:?}", n as i64),
+                other => format!("unexpected:{:?}", other),
+            }
+        ),
+        3 => print!(
+            "file_version={} ",
+            match key.read(buf)? {
+                ProtoValue::LengthDelimited(payload) => {
+                    format!("{:?}", String::from_utf8_lossy(payload))
+                }
+                other => format!("unexpected:{:?}", other),
+            }
+        ),
+        5 => print!(
+            "summary={} ",
+            match key.read(buf)? {
+                ProtoValue::LengthDelimited(payload) => {
+                    format!("[blob of length {}]", payload.len())
+                }
+                other => format!("unexpected:{:?}", other),
+            }
+        ),
+        n => {
+            print!("field{}[ignored] ", n);
+            key.skip(buf)?;
+        }
+    };
+    Some(())
+}
+
 fn parse_event_proto(event: &Vec<u8>) {
     // Relevant fields on proto `Event`:
     //   double wall_time = 1;
@@ -70,28 +198,7 @@ fn parse_event_proto(event: &Vec<u8>) {
     // On `Tensor`:
     //   repeated double double_val = 6 [packed = true];
     let mut buf: &[u8] = &event[..];
-    fn skip(it: &mut &[u8], n: u64) {
-        *it = &it[n as usize..];
-    }
-    while let Some(key) = read_varu64(&mut buf) {
-        let wire_type = key & 0b111;
-        let field_number = (key & !0b111) >> 3;
-        match wire_type {
-            0 => {
-                // single varint
-                read_varu64(&mut buf);
-            }
-            2 => {
-                // length-delimited
-                let len = read_varu64(&mut buf).unwrap();
-                skip(&mut buf, len);
-            }
-            1 => skip(&mut buf, 8), // fixed 64-bit
-            5 => skip(&mut buf, 4), // fixed 32-bit
-            n => unimplemented!("wire type format {}", n),
-        }
-        print!("f#{}[wt={}] ", field_number, wire_type);
-    }
+    while let Some(()) = parse_event_field(&mut buf) {}
     println!("<end>");
 }
 
