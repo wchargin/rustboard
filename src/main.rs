@@ -155,42 +155,43 @@ fn parse_event_proto(event: &Vec<u8>) {
     // On `Tensor`:
     //   repeated double double_val = 6 [packed = true];
     let mut buf: &[u8] = &event[..];
+    print!("event {{ ");
     while let Some(()) = parse_event_field(&mut buf) {}
-    println!("<end>");
+    println!("}}");
 
     fn parse_event_field(buf: &mut &[u8]) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
             1 => print!(
-                "wall_time={} ",
+                "wall_time: {} ",
                 match key.read(buf)? {
                     ProtoValue::Fixed64(n) => format!("{:?}", f64::from_bits(n)),
-                    other => format!("unexpected:{:?}", other),
+                    other => format!("unexpected[{:?}]", other),
                 }
             ),
             2 => print!(
-                "step={} ",
+                "step: {} ",
                 match key.read(buf)? {
                     ProtoValue::Varint(n) => format!("{:?}", n as i64),
-                    other => format!("unexpected:{:?}", other),
+                    other => format!("unexpected[{:?}]", other),
                 }
             ),
             3 => print!(
-                "file_version={} ",
+                "file_version: {} ",
                 match key.read(buf)? {
                     ProtoValue::LengthDelimited(payload) => {
                         format!("{:?}", String::from_utf8_lossy(payload))
                     }
-                    other => format!("unexpected:{:?}", other),
+                    other => format!("unexpected[{:?}]", other),
                 }
             ),
             5 => match key.read(buf)? {
                 ProtoValue::LengthDelimited(msg) => {
-                    print!("summary=[");
+                    print!("summary {{ ");
                     parse_summary_proto(msg);
-                    print!("] ");
+                    print!("}} ");
                 }
-                other => print!("summary=unexpected:{:?}", other),
+                other => print!("summary {{ unexpected[{:?}] }}", other),
             },
             n => {
                 print!("field{}[ignored] ", n);
@@ -204,19 +205,18 @@ fn parse_event_proto(event: &Vec<u8>) {
 fn parse_summary_proto(message: &[u8]) -> Option<()> {
     let mut buf: &[u8] = &message[..];
     while let Some(()) = parse_summary_field(&mut buf) {}
-    print!("<end>");
     return Some(());
 
     fn parse_summary_field(buf: &mut &[u8]) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
             1 => print!(
-                "value={} ",
+                "value: {} ",
                 match key.read(buf)? {
                     ProtoValue::LengthDelimited(payload) => {
                         format!("[blob of length {}]", payload.len())
                     }
-                    other => format!("unexpected:{:?}", other),
+                    other => format!("unexpected[{:?}]", other),
                 }
             ),
             n => {
