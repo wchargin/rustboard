@@ -69,27 +69,25 @@ fn parse_event_proto(event: &Vec<u8>) {
     //   string plugin_name = 1;
     // On `Tensor`:
     //   repeated double double_val = 6 [packed = true];
-    let mut it = event.iter().copied();
-    fn skip<I: Iterator>(it: &mut I, n: u64) {
-        for _ in 0..n {
-            it.next();
-        }
+    let mut buf: &[u8] = &event[..];
+    fn skip(it: &mut &[u8], n: u64) {
+        *it = &it[n as usize..];
     }
-    while let Some(key) = read_varu64(&mut it) {
+    while let Some(key) = read_varu64(&mut buf) {
         let wire_type = key & 0b111;
         let field_number = (key & !0b111) >> 3;
         match wire_type {
             0 => {
                 // single varint
-                read_varu64(&mut it);
+                read_varu64(&mut buf);
             }
             2 => {
                 // length-delimited
-                let len = read_varu64(&mut it).unwrap();
-                skip(&mut it, len);
+                let len = read_varu64(&mut buf).unwrap();
+                skip(&mut buf, len);
             }
-            1 => skip(&mut it, 8), // fixed 64-bit
-            5 => skip(&mut it, 4), // fixed 32-bit
+            1 => skip(&mut buf, 8), // fixed 64-bit
+            5 => skip(&mut buf, 4), // fixed 32-bit
             n => unimplemented!("wire type format {}", n),
         }
         print!("f#{}[wt={}] ", field_number, wire_type);
@@ -97,10 +95,11 @@ fn parse_event_proto(event: &Vec<u8>) {
     println!("<end>");
 }
 
-fn read_varu64<I: Iterator<Item = u8>>(it: &mut I) -> Option<u64> {
+fn read_varu64(buf: &mut &[u8]) -> Option<u64> {
     let mut result: u64 = 0;
     for i in 0..9 {
-        let byte = it.next()?;
+        let byte = buf.get(0)?;
+        *buf = &buf[1..];
         result |= ((byte & 0x7F) as u64) << (i * 7);
         if byte & 0x80 == 0 {
             return Some(result);
