@@ -26,11 +26,7 @@ fn read_events(filename: &str) -> io::Result<()> {
     let mut file = File::open(filename)?;
     loop {
         match read_event(&mut file) {
-            Ok(block) => println!(
-                "read block of length {}: {:?}",
-                block.len(),
-                String::from_utf8_lossy(&block)
-            ),
+            Ok(block) => parse_event_proto(&block),
             Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
             Err(e) => return Err(e),
         }
@@ -54,4 +50,40 @@ fn read_event(f: &mut File) -> io::Result<Vec<u8>> {
     }
     f.read_u32::<LittleEndian>()?; // skip data checksum
     Ok(buf)
+}
+
+fn parse_event_proto(event: &Vec<u8>) {
+    // Relevant fields on proto `Event`:
+    //   double wall_time = 1;
+    //   int64 step = 2;
+    //   Summary summary = 5;
+    // On `Summary`:
+    //   repeated Value value = 1;
+    // On `Value`:
+    //   string tag = 1;
+    //   SummaryMetadata metadata = 9;
+    //   TensorProto tensor = 8;
+    // On `SummaryMetadata`:
+    //   PluginData plugin_data = 1;
+    // On `PluginData`:
+    //   string plugin_name = 1;
+    // On `Tensor`:
+    //   repeated double double_val = 6 [packed = true];
+    let mut it = event.iter().copied();
+    while let Some(i) = read_varu64(&mut it) {
+        print!("{} ", i);
+    }
+    println!("<end>");
+}
+
+fn read_varu64<I: Iterator<Item = u8>>(it: &mut I) -> Option<u64> {
+    let mut result: u64 = 0;
+    for i in 0..9 {
+        let byte = it.next()?;
+        result |= ((byte & 0x7F) as u64) << (i * 7);
+        if byte & 0x80 == 0 {
+            return Some(result);
+        }
+    }
+    None // took too many bytes, still wasn't done
 }
