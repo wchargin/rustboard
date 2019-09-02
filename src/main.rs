@@ -52,7 +52,12 @@ fn main() {
         let run = entry
             .path()
             .parent()
-            .map(|x| x.to_string_lossy().into_owned())
+            .map(|x| {
+                x.strip_prefix(logdir)
+                    .unwrap_or(x)
+                    .to_string_lossy()
+                    .into_owned()
+            })
             .unwrap_or_else(|| ".".to_string());
         if verbose {
             println!("Reading data for run {:?} from {:?}", run, entry.path());
