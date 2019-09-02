@@ -4,34 +4,71 @@ use std::env;
 use std::fs::File;
 use std::io;
 use std::io::Read;
+use std::path::Path;
+use walkdir::WalkDir;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let events_file = if args.len() == 2 {
+    let logdir = if args.len() == 2 {
         &args[1]
     } else {
         eprintln!(
-            "usage: {} EVENTS_FILE",
+            "usage: {} LOGDIR",
             args.first().map(String::as_ref).unwrap_or("rustboard")
         );
         std::process::exit(1);
     };
-    println!("Processing file: {}", events_file);
-    let accumulator = read_events(events_file).unwrap_or_else(|e| {
-        eprintln!("error: {:?}", e);
-        std::process::exit(1);
-    });
-    let stdout = io::stdout();
-    let mut handle = io::BufWriter::new(stdout.lock());
-    for (tag, points) in accumulator.time_series {
-        use std::io::Write;
-        writeln!(handle).unwrap();
-        writeln!(handle, "=== {:?} ===", tag).unwrap();
-        for pt in points {
-            writeln!(handle, "({}, {}) @ {}", pt.step, pt.value, pt.wall_time).unwrap();
+
+    let mut multiplexer = ScalarsMultiplexer {
+        runs: HashMap::new(),
+    };
+    for entry in WalkDir::new(logdir) {
+        let entry: walkdir::DirEntry = match entry {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        if !entry.file_name().to_string_lossy().contains("tfevents") {
+            continue;
+        }
+        let run = entry
+            .path()
+            .parent()
+            .map(|x| x.to_string_lossy().into_owned())
+            .unwrap_or_else(|| ".".to_string());
+        println!("Reading data for run {:?} from {:?}", run, entry.path());
+        let accumulator = match read_events(entry.path()) {
+            Ok(acc) => acc,
+            Err(e) => {
+                eprintln!("error: {:?}", e);
+                continue;
+            }
+        };
+        use std::collections::hash_map::Entry;
+        match multiplexer.runs.entry(RunId(run)) {
+            Entry::Occupied(mut e) => {
+                println!("Warning: Replacing existing data.");
+                e.insert(accumulator);
+            }
+            Entry::Vacant(e) => {
+                e.insert(accumulator);
+            }
+        }
+    }
+
+    println!("Read data for {} run(s).", multiplexer.runs.len());
+    for (run, accumulator) in multiplexer.runs {
+        println!("* {}", run.0);
+        for (tag, points) in accumulator.time_series {
+            println!("  - {} ({} points)", tag.0, points.len());
         }
     }
 }
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct RunId(String);
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct TagId(String);
@@ -46,11 +83,16 @@ struct ScalarPoint {
     value: f32,
 }
 
+struct ScalarsMultiplexer {
+    runs: HashMap<RunId, ScalarsAccumulator>,
+}
+
+#[derive(Default)]
 struct ScalarsAccumulator {
     time_series: HashMap<TagId, Vec<ScalarPoint>>,
 }
 
-fn read_events(filename: &str) -> io::Result<ScalarsAccumulator> {
+fn read_events<P: AsRef<Path>>(filename: P) -> io::Result<ScalarsAccumulator> {
     let file = File::open(filename)?;
     let mut reader = io::BufReader::new(file);
     let mut result = ScalarsAccumulator {
