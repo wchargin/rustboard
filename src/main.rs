@@ -259,24 +259,19 @@ mod server {
             let shared_state = Arc::new(self);
             let server = HttpServer::new(move || {
                 App::new()
-                    .service(web::resource("/").route(web::get().to(index)))
-                    .service(web::resource("/index.html").route(web::get().to(index)))
-                    .service(web::resource("/data/runs").route(web::get().to(data_runs)))
-                    .service(web::resource("/data/logdir").route(web::get().to(data_logdir)))
-                    .service(
-                        web::resource("/data/environment").route(web::get().to(data_environment)),
+                    .route("/", web::get().to(index))
+                    .route("/index", web::get().to(index))
+                    .route("/data/runs", web::get().to(data_runs))
+                    .route("/data/logdir", web::get().to(data_logdir))
+                    .route("/data/environment", web::get().to(data_environment))
+                    .route("/data/plugins_listing", web::get().to(data_plugins_listing))
+                    .route(
+                        "/data/plugin/scalars/tags",
+                        web::get().to(data_plugin_scalars_tags),
                     )
-                    .service(
-                        web::resource("/data/plugins_listing")
-                            .route(web::get().to(data_plugins_listing)),
-                    )
-                    .service(
-                        web::resource("/data/plugin/scalars/tags")
-                            .route(web::get().to(data_plugin_scalars_tags)),
-                    )
-                    .service(
-                        web::resource("/data/plugin/scalars/scalars")
-                            .route(web::get().to(data_plugin_scalars_scalars)),
+                    .route(
+                        "/data/plugin/scalars/scalars",
+                        web::get().to(data_plugin_scalars_scalars),
                     )
                     .data(shared_state.clone())
             })
