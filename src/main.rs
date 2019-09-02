@@ -1,5 +1,6 @@
 use actix_web::{web, App, HttpServer, Responder};
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
@@ -79,7 +80,38 @@ fn serve(logdir: String, multiplexer: ScalarsMultiplexer) {
     }
 
     fn data_logdir(data: web::Data<Arc<SharedState>>) -> impl Responder {
-        format!("{:?}", data.logdir)
+        web::Json(data.logdir.clone())
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct TagInfo {
+        // TODO(wchargin): Avoid copies here and throughout this handler.
+        display_name: String,
+        description: String,
+    }
+
+    impl TagInfo {
+        fn new() -> TagInfo {
+            TagInfo {
+                display_name: String::new(),
+                description: String::new(),
+            }
+        }
+    }
+
+    #[derive(Serialize)]
+    struct TagsResponse(HashMap<RunId, HashMap<TagId, TagInfo>>);
+
+    fn data_plugin_scalars_tags(data: web::Data<Arc<SharedState>>) -> impl Responder {
+        let mut result: TagsResponse = TagsResponse(HashMap::new());
+        for (run, accumulator) in &data.multiplexer.runs {
+            let run_info = result.0.entry(run.clone()).or_default();
+            for tag in accumulator.time_series.keys() {
+                run_info.insert(tag.clone(), TagInfo::new());
+            }
+        }
+        web::Json(result)
     }
 
     let address = "localhost:6006";
@@ -90,6 +122,10 @@ fn serve(logdir: String, multiplexer: ScalarsMultiplexer) {
     let server = HttpServer::new(move || {
         App::new()
             .service(web::resource("/data/logdir").route(web::get().to(data_logdir)))
+            .service(
+                web::resource("/data/plugin/scalars/tags")
+                    .route(web::get().to(data_plugin_scalars_tags)),
+            )
             .data(shared_state.clone())
     })
     .bind(address)
@@ -98,10 +134,10 @@ fn serve(logdir: String, multiplexer: ScalarsMultiplexer) {
     server.run().expect("Failed to run");
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Serialize, Clone)]
 struct RunId(String);
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Serialize, Clone)]
 struct TagId(String);
 
 #[derive(Debug, PartialEq)]
