@@ -59,9 +59,7 @@ fn main() {
         })
         .unwrap_or(DEFAULT_RESERVOIR_SIZE);
 
-    let mut multiplexer = ScalarsMultiplexer {
-        runs: HashMap::new(),
-    };
+    let mut multiplexer = ScalarsMultiplexer::new();
     for entry in WalkDir::new(logdir) {
         let entry: walkdir::DirEntry = match entry {
             Ok(entry) => entry,
@@ -185,11 +183,17 @@ mod server {
     }
 
     fn data_runs(data: web::Data<AppData>) -> impl Responder {
+        let mut runs = data
+            .multiplexer
+            .runs
+            .iter()
+            .map(|(run_id, accumulator)| (run_id.clone(), accumulator.first_event_timestamp))
+            .collect::<Vec<_>>();
+        use std::cmp::Ordering;
+        runs.sort_by(|&(_, t1), &(_, t2)| t1.partial_cmp(&t2).unwrap_or(Ordering::Less));
         web::Json(
-            data.multiplexer
-                .runs
-                .iter()
-                .map(|x| x.0.clone())
+            runs.into_iter()
+                .map(|(run_id, _timestamp)| run_id)
                 .collect::<Vec<_>>(),
         )
     }
@@ -335,12 +339,28 @@ pub struct ScalarsMultiplexer {
     runs: HashMap<RunId, ScalarsAccumulator>,
 }
 
+impl ScalarsMultiplexer {
+    fn new() -> Self {
+        ScalarsMultiplexer {
+            runs: HashMap::new(),
+        }
+    }
+}
+
 struct ScalarsAccumulator {
     reservoir_size: usize,
+    first_event_timestamp: Option<f64>,
     time_series: HashMap<TagId, Reservoir<ScalarPoint>>,
 }
 
 impl ScalarsAccumulator {
+    fn from_reservoir_size(reservoir_size: usize) -> Self {
+        ScalarsAccumulator {
+            reservoir_size,
+            first_event_timestamp: None,
+            time_series: HashMap::new(),
+        }
+    }
     fn series(&mut self, tag: TagId) -> &mut Reservoir<ScalarPoint> {
         let size = self.reservoir_size;
         self.time_series
@@ -387,10 +407,7 @@ fn read_events<P: AsRef<Path>>(
 ) -> io::Result<ScalarsAccumulator> {
     let file = File::open(filename)?;
     let mut reader = io::BufReader::new(file);
-    let mut result = ScalarsAccumulator {
-        reservoir_size,
-        time_series: HashMap::new(),
-    };
+    let mut result = ScalarsAccumulator::from_reservoir_size(reservoir_size);
     loop {
         match read_event(&mut reader) {
             Ok(block) => parse_event_proto(&block, &mut result),
@@ -538,6 +555,7 @@ fn parse_event_proto(event: &Vec<u8>, accumulator: &mut ScalarsAccumulator) {
     let mut step: i64 = 0;
     let mut tag_values: Vec<TagValue> = Vec::new();
     while let Some(()) = parse_event_field(&mut buf, &mut wall_time, &mut step, &mut tag_values) {}
+    accumulator.first_event_timestamp.get_or_insert(wall_time);
     for tag_value in tag_values.into_iter() {
         accumulator.series(tag_value.tag).add(ScalarPoint {
             step,
