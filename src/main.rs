@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 use walkdir::WalkDir;
 
-const RESERVOIR_SIZE: usize = 1000;
+const DEFAULT_RESERVOIR_SIZE: usize = 1000;
 
 fn main() {
     use clap::Arg;
@@ -33,10 +33,14 @@ fn main() {
                 .long("verbose")
                 .help("Print more information."),
         )
+        .arg(
+            Arg::with_name("downsample")
+                .long("downsample")
+                .help("Downsample to this number of points per time series")
+                .takes_value(true),
+        )
         .get_matches();
 
-    let logdir = matches.value_of("logdir").unwrap();
-    let inspect = matches.is_present("inspect");
     env_logger::from_env(env_logger::Env::default().default_filter_or(
         if matches.is_present("verbose") {
             "info"
@@ -45,6 +49,15 @@ fn main() {
         },
     ))
     .init();
+    let logdir = matches.value_of("logdir").unwrap();
+    let inspect = matches.is_present("inspect");
+    let reservoir_size: usize = matches
+        .value_of("downsample")
+        .map(|x| {
+            x.parse::<usize>()
+                .expect("--downsample must be a non-negative integer")
+        })
+        .unwrap_or(DEFAULT_RESERVOIR_SIZE);
 
     let mut multiplexer = ScalarsMultiplexer {
         runs: HashMap::new(),
@@ -71,7 +84,7 @@ fn main() {
             })
             .unwrap_or_else(|| ".".to_string());
         info!("Reading data for run {:?} from {:?}", run, entry.path());
-        let accumulator = match read_events(entry.path()) {
+        let accumulator = match read_events(entry.path(), reservoir_size) {
             Ok(acc) => acc,
             Err(e) => {
                 error!("{:?}", e);
@@ -322,9 +335,18 @@ pub struct ScalarsMultiplexer {
     runs: HashMap<RunId, ScalarsAccumulator>,
 }
 
-#[derive(Default)]
 struct ScalarsAccumulator {
+    reservoir_size: usize,
     time_series: HashMap<TagId, Reservoir<ScalarPoint>>,
+}
+
+impl ScalarsAccumulator {
+    fn series(&mut self, tag: TagId) -> &mut Reservoir<ScalarPoint> {
+        let size = self.reservoir_size;
+        self.time_series
+            .entry(tag)
+            .or_insert_with(|| Reservoir::new(size))
+    }
 }
 
 #[derive(Debug)]
@@ -359,10 +381,14 @@ impl<T> Reservoir<T> {
     }
 }
 
-fn read_events<P: AsRef<Path>>(filename: P) -> io::Result<ScalarsAccumulator> {
+fn read_events<P: AsRef<Path>>(
+    filename: P,
+    reservoir_size: usize,
+) -> io::Result<ScalarsAccumulator> {
     let file = File::open(filename)?;
     let mut reader = io::BufReader::new(file);
     let mut result = ScalarsAccumulator {
+        reservoir_size,
         time_series: HashMap::new(),
     };
     loop {
@@ -513,15 +539,11 @@ fn parse_event_proto(event: &Vec<u8>, accumulator: &mut ScalarsAccumulator) {
     let mut tag_values: Vec<TagValue> = Vec::new();
     while let Some(()) = parse_event_field(&mut buf, &mut wall_time, &mut step, &mut tag_values) {}
     for tag_value in tag_values.into_iter() {
-        accumulator
-            .time_series
-            .entry(tag_value.tag)
-            .or_insert_with(|| Reservoir::new(RESERVOIR_SIZE))
-            .add(ScalarPoint {
-                step,
-                wall_time,
-                value: tag_value.value,
-            })
+        accumulator.series(tag_value.tag).add(ScalarPoint {
+            step,
+            wall_time,
+            value: tag_value.value,
+        })
     }
 
     // Relevant fields on `Event`:
