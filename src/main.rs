@@ -179,6 +179,21 @@ mod server {
     }
 
     #[derive(Serialize)]
+    struct EnvironmentResponse<'a> {
+        window_title: &'a str,
+        mode: &'a str,
+        data_location: String,
+    }
+
+    fn data_environment(data: web::Data<AppData>) -> impl Responder {
+        web::Json(EnvironmentResponse {
+            window_title: "TensorBoard",
+            mode: "logdir",
+            data_location: data.logdir.clone(),
+        })
+    }
+
+    #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     struct TagInfo {
         // TODO(wchargin): Avoid copies here and throughout this handler.
@@ -248,6 +263,9 @@ mod server {
                     .service(web::resource("/index.html").route(web::get().to(index)))
                     .service(web::resource("/data/runs").route(web::get().to(data_runs)))
                     .service(web::resource("/data/logdir").route(web::get().to(data_logdir)))
+                    .service(
+                        web::resource("/data/environment").route(web::get().to(data_environment)),
+                    )
                     .service(
                         web::resource("/data/plugins_listing")
                             .route(web::get().to(data_plugins_listing)),
