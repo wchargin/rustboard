@@ -1,4 +1,5 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
+use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
@@ -33,7 +34,14 @@ fn main() {
 
     let logdir = matches.value_of("logdir").unwrap();
     let inspect = matches.is_present("inspect");
-    let verbose = matches.is_present("verbose");
+    env_logger::from_env(env_logger::Env::default().default_filter_or(
+        if matches.is_present("verbose") {
+            "info"
+        } else {
+            "warn"
+        },
+    ))
+    .init();
 
     let mut multiplexer = ScalarsMultiplexer {
         runs: HashMap::new(),
@@ -59,20 +67,18 @@ fn main() {
                     .into_owned()
             })
             .unwrap_or_else(|| ".".to_string());
-        if verbose {
-            println!("Reading data for run {:?} from {:?}", run, entry.path());
-        }
+        info!("Reading data for run {:?} from {:?}", run, entry.path());
         let accumulator = match read_events(entry.path()) {
             Ok(acc) => acc,
             Err(e) => {
-                eprintln!("error: {:?}", e);
+                error!("{:?}", e);
                 continue;
             }
         };
         use std::collections::hash_map::Entry;
         match multiplexer.runs.entry(RunId(run)) {
             Entry::Occupied(mut e) => {
-                println!("Warning: Replacing existing data.");
+                warn!("Replacing existing data");
                 e.insert(accumulator);
             }
             Entry::Vacant(e) => {
@@ -82,20 +88,17 @@ fn main() {
     }
 
     if inspect {
-        println!("Read data for {} run(s).", multiplexer.runs.len());
-        if verbose {
-            for (run, accumulator) in &multiplexer.runs {
-                println!("* {}", run.0);
-                for (tag, points) in &accumulator.time_series {
-                    println!("  - {} ({} points)", tag.0, points.len());
-                }
+        info!("Read data for {} run(s)", multiplexer.runs.len());
+        for (run, accumulator) in &multiplexer.runs {
+            info!("* {}", run.0);
+            for (tag, points) in &accumulator.time_series {
+                info!("  - {} ({} points)", tag.0, points.len());
             }
         }
     } else {
         server::AppState {
             logdir: logdir.to_string(),
             multiplexer,
-            verbose,
         }
         .serve();
     }
@@ -109,7 +112,6 @@ mod server {
     pub struct AppState {
         pub logdir: String,
         pub multiplexer: ScalarsMultiplexer,
-        pub verbose: bool,
     }
     type AppData = Arc<AppState>;
 
