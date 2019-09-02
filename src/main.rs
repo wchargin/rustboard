@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io;
 use std::io::Read;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use walkdir::WalkDir;
 
 const DEFAULT_RESERVOIR_SIZE: usize = 1000;
@@ -59,7 +59,8 @@ fn main() {
         })
         .unwrap_or(DEFAULT_RESERVOIR_SIZE);
 
-    let mut multiplexer = ScalarsMultiplexer::new();
+    let multiplexer = Arc::new(Mutex::new(ScalarsMultiplexer::new()));
+    let mut threads = Vec::new();
     for entry in WalkDir::new(logdir) {
         let entry: walkdir::DirEntry = match entry {
             Ok(entry) => entry,
@@ -81,25 +82,39 @@ fn main() {
                     .into_owned()
             })
             .unwrap_or_else(|| ".".to_string());
-        info!("Reading data for run {:?} from {:?}", run, entry.path());
-        let accumulator = match read_events(entry.path(), reservoir_size) {
-            Ok(acc) => acc,
-            Err(e) => {
-                error!("{:?}", e);
-                continue;
+        let multiplexer = Arc::clone(&multiplexer);
+        threads.push(std::thread::spawn(move || {
+            info!("Reading data for run {:?} from {:?}", run, entry.path());
+            let accumulator = match read_events(entry.path(), reservoir_size) {
+                Ok(acc) => acc,
+                Err(e) => {
+                    error!("{:?}", e);
+                    return;
+                }
+            };
+            let mut multiplexer = multiplexer
+                .lock()
+                .expect("mutex poisoned; sibling thread panicked");
+            use std::collections::hash_map::Entry;
+            match multiplexer.runs.entry(RunId(run)) {
+                Entry::Occupied(mut e) => {
+                    warn!("Replacing existing data");
+                    e.insert(accumulator);
+                }
+                Entry::Vacant(e) => {
+                    e.insert(accumulator);
+                }
             }
-        };
-        use std::collections::hash_map::Entry;
-        match multiplexer.runs.entry(RunId(run)) {
-            Entry::Occupied(mut e) => {
-                warn!("Replacing existing data");
-                e.insert(accumulator);
-            }
-            Entry::Vacant(e) => {
-                e.insert(accumulator);
-            }
-        }
+        }));
     }
+    for thread in threads.into_iter() {
+        thread.join().expect("child thread panicked");
+    }
+    let multiplexer: ScalarsMultiplexer = Arc::try_unwrap(multiplexer)
+        .map_err(|_| ())
+        .expect("lingering reference")
+        .into_inner()
+        .expect("mutex poisoned; child thread panicked");
 
     if inspect {
         info!("Read data for {} run(s)", multiplexer.runs.len());
