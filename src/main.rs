@@ -1,5 +1,3 @@
-use actix_files::NamedFile;
-use actix_web::{web, App, HttpServer, Responder};
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -89,11 +87,15 @@ fn main() {
             }
         }
     } else {
-        serve(logdir.to_string(), multiplexer);
+        server::serve(logdir.to_string(), multiplexer);
     }
 }
 
-fn serve(logdir: String, multiplexer: ScalarsMultiplexer) {
+mod server {
+    use super::*;
+    use actix_files::NamedFile;
+    use actix_web::{web, App, HttpServer, Responder};
+
     struct SharedState {
         logdir: String,
         #[allow(unused)]
@@ -227,34 +229,37 @@ fn serve(logdir: String, multiplexer: ScalarsMultiplexer) {
         Ok(web::Json(ScalarsResponse(result)))
     }
 
-    let address = "localhost:6006";
-    let shared_state = Arc::new(SharedState {
-        logdir,
-        multiplexer,
-    });
-    let server = HttpServer::new(move || {
-        App::new()
-            .service(web::resource("/").route(web::get().to(index)))
-            .service(web::resource("/index.html").route(web::get().to(index)))
-            .service(web::resource("/data/runs").route(web::get().to(data_runs)))
-            .service(web::resource("/data/logdir").route(web::get().to(data_logdir)))
-            .service(
-                web::resource("/data/plugins_listing").route(web::get().to(data_plugins_listing)),
-            )
-            .service(
-                web::resource("/data/plugin/scalars/tags")
-                    .route(web::get().to(data_plugin_scalars_tags)),
-            )
-            .service(
-                web::resource("/data/plugin/scalars/scalars")
-                    .route(web::get().to(data_plugin_scalars_scalars)),
-            )
-            .data(shared_state.clone())
-    })
-    .bind(address)
-    .expect("Failed to bind");
-    println!("Started web server at http://{}", address);
-    server.run().expect("Failed to run");
+    pub fn serve(logdir: String, multiplexer: ScalarsMultiplexer) {
+        let address = "localhost:6006";
+        let shared_state = Arc::new(SharedState {
+            logdir,
+            multiplexer,
+        });
+        let server = HttpServer::new(move || {
+            App::new()
+                .service(web::resource("/").route(web::get().to(index)))
+                .service(web::resource("/index.html").route(web::get().to(index)))
+                .service(web::resource("/data/runs").route(web::get().to(data_runs)))
+                .service(web::resource("/data/logdir").route(web::get().to(data_logdir)))
+                .service(
+                    web::resource("/data/plugins_listing")
+                        .route(web::get().to(data_plugins_listing)),
+                )
+                .service(
+                    web::resource("/data/plugin/scalars/tags")
+                        .route(web::get().to(data_plugin_scalars_tags)),
+                )
+                .service(
+                    web::resource("/data/plugin/scalars/scalars")
+                        .route(web::get().to(data_plugin_scalars_scalars)),
+                )
+                .data(shared_state.clone())
+        })
+        .bind(address)
+        .expect("Failed to bind");
+        println!("Started web server at http://{}", address);
+        server.run().expect("Failed to run");
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Clone)]
