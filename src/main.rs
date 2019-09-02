@@ -1,6 +1,6 @@
 use actix_web::{web, App, HttpServer, Responder};
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
@@ -114,6 +114,35 @@ fn serve(logdir: String, multiplexer: ScalarsMultiplexer) {
         web::Json(result)
     }
 
+    #[derive(Deserialize)]
+    struct ScalarsRequest {
+        run: String,
+        tag: String,
+    }
+
+    #[derive(Serialize)]
+    struct ScalarsResponse(Vec<(f64, i64, f32)>);
+
+    fn data_plugin_scalars_scalars(
+        data: web::Data<Arc<SharedState>>,
+        mut query: web::Query<ScalarsRequest>,
+    ) -> Result<web::Json<ScalarsResponse>, actix_web::error::Error> {
+        use actix_web::error::ErrorBadRequest;
+        let run = RunId(std::mem::replace(&mut query.run, String::new()));
+        let tag = TagId(std::mem::replace(&mut query.tag, String::new()));
+        let time_series = data
+            .multiplexer
+            .runs
+            .get(&run)
+            .and_then(|acc| acc.time_series.get(&tag))
+            .ok_or_else(|| ErrorBadRequest("Invalid run/tag"))?;
+        let result = time_series
+            .iter()
+            .map(|pt| (pt.wall_time, pt.step, pt.value))
+            .collect::<Vec<_>>();
+        Ok(web::Json(ScalarsResponse(result)))
+    }
+
     let address = "localhost:6006";
     let shared_state = Arc::new(SharedState {
         logdir,
@@ -126,6 +155,10 @@ fn serve(logdir: String, multiplexer: ScalarsMultiplexer) {
                 web::resource("/data/plugin/scalars/tags")
                     .route(web::get().to(data_plugin_scalars_tags)),
             )
+            .service(
+                web::resource("/data/plugin/scalars/scalars")
+                    .route(web::get().to(data_plugin_scalars_scalars)),
+            )
             .data(shared_state.clone())
     })
     .bind(address)
@@ -134,10 +167,10 @@ fn serve(logdir: String, multiplexer: ScalarsMultiplexer) {
     server.run().expect("Failed to run");
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Serialize, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Clone)]
 struct RunId(String);
 
-#[derive(Debug, PartialEq, Eq, Hash, Serialize, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Clone)]
 struct TagId(String);
 
 #[derive(Debug, PartialEq)]
