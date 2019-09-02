@@ -84,6 +84,55 @@ fn serve(logdir: String, multiplexer: ScalarsMultiplexer) {
         NamedFile::open("index.html")
     }
 
+    #[derive(Serialize)]
+    struct PluginStatus {
+        disable_reload: bool,
+        enabled: bool,
+        loading_mechanism: LoadingMechanism,
+        remove_dom: bool,
+        tab_name: &'static str,
+    }
+
+    #[derive(Serialize)]
+    #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+    enum LoadingMechanism {
+        CustomElement {
+            element_name: &'static str,
+        },
+        #[allow(dead_code)]
+        Iframe {
+            es_module_path: &'static str,
+        },
+        #[allow(dead_code)]
+        None,
+    }
+
+    #[derive(Serialize)]
+    struct PluginsListingResponse(HashMap<&'static str, PluginStatus>);
+
+    fn data_plugins_listing(data: web::Data<Arc<SharedState>>) -> impl Responder {
+        let have_scalars = data
+            .multiplexer
+            .runs
+            .values()
+            .flat_map(|accumulator| accumulator.time_series.values())
+            .any(|ts| ts.len() > 0);
+        let mut res = PluginsListingResponse(HashMap::new());
+        res.0.insert(
+            "scalars",
+            PluginStatus {
+                disable_reload: false,
+                enabled: have_scalars,
+                loading_mechanism: LoadingMechanism::CustomElement {
+                    element_name: "tf-scalar-dashboard",
+                },
+                tab_name: "scalars",
+                remove_dom: false,
+            },
+        );
+        web::Json(res)
+    }
+
     fn data_logdir(data: web::Data<Arc<SharedState>>) -> impl Responder {
         web::Json(data.logdir.clone())
     }
@@ -158,6 +207,9 @@ fn serve(logdir: String, multiplexer: ScalarsMultiplexer) {
             .service(web::resource("/").route(web::get().to(index)))
             .service(web::resource("/index.html").route(web::get().to(index)))
             .service(web::resource("/data/logdir").route(web::get().to(data_logdir)))
+            .service(
+                web::resource("/data/plugins_listing").route(web::get().to(data_plugins_listing)),
+            )
             .service(
                 web::resource("/data/plugin/scalars/tags")
                     .route(web::get().to(data_plugin_scalars_tags)),
