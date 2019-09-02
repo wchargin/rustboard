@@ -133,6 +133,16 @@ fn serve(logdir: String, multiplexer: ScalarsMultiplexer) {
         web::Json(res)
     }
 
+    fn data_runs(data: web::Data<Arc<SharedState>>) -> impl Responder {
+        web::Json(
+            data.multiplexer
+                .runs
+                .iter()
+                .map(|x| x.0.clone())
+                .collect::<Vec<_>>(),
+        )
+    }
+
     fn data_logdir(data: web::Data<Arc<SharedState>>) -> impl Responder {
         web::Json(data.logdir.clone())
     }
@@ -206,6 +216,7 @@ fn serve(logdir: String, multiplexer: ScalarsMultiplexer) {
         App::new()
             .service(web::resource("/").route(web::get().to(index)))
             .service(web::resource("/index.html").route(web::get().to(index)))
+            .service(web::resource("/data/runs").route(web::get().to(data_runs)))
             .service(web::resource("/data/logdir").route(web::get().to(data_logdir)))
             .service(
                 web::resource("/data/plugins_listing").route(web::get().to(data_plugins_listing)),
