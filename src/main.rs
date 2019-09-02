@@ -3,7 +3,6 @@ use actix_web::{web, App, HttpServer, Responder};
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::env;
 use std::fs::File;
 use std::io;
 use std::io::Read;
@@ -12,16 +11,31 @@ use std::sync::Arc;
 use walkdir::WalkDir;
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    let logdir = if args.len() == 2 {
-        &args[1]
-    } else {
-        eprintln!(
-            "usage: {} LOGDIR",
-            args.first().map(String::as_ref).unwrap_or("rustboard")
-        );
-        std::process::exit(1);
-    };
+    use clap::Arg;
+    let matches = clap::App::new("rustboard")
+        .arg(
+            Arg::with_name("logdir")
+                .long("logdir")
+                .value_name("LOGDIR")
+                .help("Directory from which to load data; will be traversed recursively")
+                .takes_value(true)
+                .required(true),
+        )
+        .arg(
+            Arg::with_name("inspect")
+                .long("inspect")
+                .help("Print statistics about loaded data rather than starting a server"),
+        )
+        .arg(
+            Arg::with_name("verbose")
+                .long("verbose")
+                .help("Print more information."),
+        )
+        .get_matches();
+
+    let logdir = matches.value_of("logdir").unwrap();
+    let inspect = matches.is_present("inspect");
+    let verbose = matches.is_present("verbose");
 
     let mut multiplexer = ScalarsMultiplexer {
         runs: HashMap::new(),
@@ -42,7 +56,9 @@ fn main() {
             .parent()
             .map(|x| x.to_string_lossy().into_owned())
             .unwrap_or_else(|| ".".to_string());
-        println!("Reading data for run {:?} from {:?}", run, entry.path());
+        if verbose {
+            println!("Reading data for run {:?} from {:?}", run, entry.path());
+        }
         let accumulator = match read_events(entry.path()) {
             Ok(acc) => acc,
             Err(e) => {
@@ -62,15 +78,19 @@ fn main() {
         }
     }
 
-    println!("Read data for {} run(s).", multiplexer.runs.len());
-    for (run, accumulator) in &multiplexer.runs {
-        println!("* {}", run.0);
-        for (tag, points) in &accumulator.time_series {
-            println!("  - {} ({} points)", tag.0, points.len());
+    if inspect {
+        println!("Read data for {} run(s).", multiplexer.runs.len());
+        if verbose {
+            for (run, accumulator) in &multiplexer.runs {
+                println!("* {}", run.0);
+                for (tag, points) in &accumulator.time_series {
+                    println!("  - {} ({} points)", tag.0, points.len());
+                }
+            }
         }
+    } else {
+        serve(logdir.to_string(), multiplexer);
     }
-
-    serve(logdir.clone(), multiplexer);
 }
 
 fn serve(logdir: String, multiplexer: ScalarsMultiplexer) {
