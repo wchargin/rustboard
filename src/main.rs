@@ -1,3 +1,4 @@
+use actix_web::{web, App, HttpServer, Responder};
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
 use std::env;
@@ -5,6 +6,7 @@ use std::fs::File;
 use std::io;
 use std::io::Read;
 use std::path::Path;
+use std::sync::Arc;
 use walkdir::WalkDir;
 
 fn main() {
@@ -59,12 +61,41 @@ fn main() {
     }
 
     println!("Read data for {} run(s).", multiplexer.runs.len());
-    for (run, accumulator) in multiplexer.runs {
+    for (run, accumulator) in &multiplexer.runs {
         println!("* {}", run.0);
-        for (tag, points) in accumulator.time_series {
+        for (tag, points) in &accumulator.time_series {
             println!("  - {} ({} points)", tag.0, points.len());
         }
     }
+
+    serve(logdir.clone(), multiplexer);
+}
+
+fn serve(logdir: String, multiplexer: ScalarsMultiplexer) {
+    struct SharedState {
+        logdir: String,
+        #[allow(unused)]
+        multiplexer: ScalarsMultiplexer,
+    }
+
+    fn data_logdir(data: web::Data<Arc<SharedState>>) -> impl Responder {
+        format!("{:?}", data.logdir)
+    }
+
+    let address = "localhost:6006";
+    let shared_state = Arc::new(SharedState {
+        logdir,
+        multiplexer,
+    });
+    let server = HttpServer::new(move || {
+        App::new()
+            .service(web::resource("/data/logdir").route(web::get().to(data_logdir)))
+            .data(shared_state.clone())
+    })
+    .bind(address)
+    .expect("Failed to bind");
+    println!("Started web server at http://{}", address);
+    server.run().expect("Failed to run");
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
