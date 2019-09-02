@@ -95,6 +95,7 @@ fn main() {
         server::AppState {
             logdir: logdir.to_string(),
             multiplexer,
+            verbose,
         }
         .serve();
     }
@@ -108,6 +109,7 @@ mod server {
     pub struct AppState {
         pub logdir: String,
         pub multiplexer: ScalarsMultiplexer,
+        pub verbose: bool,
     }
     type AppData = Arc<AppState>;
 
