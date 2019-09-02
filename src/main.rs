@@ -1,5 +1,6 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use log::{error, info, warn};
+use rand_chacha::ChaChaRng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
@@ -8,6 +9,8 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 use walkdir::WalkDir;
+
+const RESERVOIR_SIZE: usize = 1000;
 
 fn main() {
     use clap::Arg;
@@ -92,7 +95,7 @@ fn main() {
         for (run, accumulator) in &multiplexer.runs {
             info!("* {}", run.0);
             for (tag, points) in &accumulator.time_series {
-                info!("  - {} ({} points)", tag.0, points.len());
+                info!("  - {} ({} points)", tag.0, points.seen);
             }
         }
     } else {
@@ -151,7 +154,7 @@ mod server {
             .runs
             .values()
             .flat_map(|accumulator| accumulator.time_series.values())
-            .any(|ts| ts.len() > 0);
+            .any(|ts| ts.items.len() > 0);
         let mut res = PluginsListingResponse(HashMap::new());
         res.0.insert(
             "scalars",
@@ -249,6 +252,7 @@ mod server {
             .and_then(|acc| acc.time_series.get(&query.tag as &str))
             .ok_or_else(|| ErrorBadRequest("Invalid run/tag"))?;
         let result = time_series
+            .items
             .iter()
             .map(|pt| (pt.wall_time, pt.step, pt.value))
             .collect::<Vec<_>>();
@@ -320,7 +324,39 @@ pub struct ScalarsMultiplexer {
 
 #[derive(Default)]
 struct ScalarsAccumulator {
-    time_series: HashMap<TagId, Vec<ScalarPoint>>,
+    time_series: HashMap<TagId, Reservoir<ScalarPoint>>,
+}
+
+#[derive(Debug)]
+pub struct Reservoir<T> {
+    capacity: usize,
+    pub items: Vec<T>,
+    rng: ChaChaRng,
+    seen: usize,
+}
+
+impl<T> Reservoir<T> {
+    fn new(capacity: usize) -> Self {
+        use rand::SeedableRng;
+        Reservoir {
+            capacity,
+            items: Vec::with_capacity(capacity),
+            rng: rand_chacha::ChaCha20Rng::from_seed(std::default::Default::default()),
+            seen: 0,
+        }
+    }
+
+    fn add(&mut self, t: T) {
+        use rand::distributions::{Distribution, Uniform};
+        self.seen += 1;
+        if self.items.len() < self.capacity {
+            self.items.push(t);
+        } else if Uniform::from(0..self.seen).sample(&mut self.rng) < self.capacity {
+            self.items
+                .remove(Uniform::from(0..self.capacity).sample(&mut self.rng));
+            self.items.push(t);
+        }
+    }
 }
 
 fn read_events<P: AsRef<Path>>(filename: P) -> io::Result<ScalarsAccumulator> {
@@ -480,8 +516,8 @@ fn parse_event_proto(event: &Vec<u8>, accumulator: &mut ScalarsAccumulator) {
         accumulator
             .time_series
             .entry(tag_value.tag)
-            .or_default()
-            .push(ScalarPoint {
+            .or_insert_with(|| Reservoir::new(RESERVOIR_SIZE))
+            .add(ScalarPoint {
                 step,
                 wall_time,
                 value: tag_value.value,
