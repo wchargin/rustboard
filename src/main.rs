@@ -235,16 +235,14 @@ mod server {
 
     fn data_plugin_scalars_scalars(
         data: web::Data<AppData>,
-        mut query: web::Query<ScalarsRequest>,
+        query: web::Query<ScalarsRequest>,
     ) -> Result<web::Json<ScalarsResponse>, actix_web::error::Error> {
         use actix_web::error::ErrorBadRequest;
-        let run = RunId(std::mem::replace(&mut query.run, String::new()));
-        let tag = TagId(std::mem::replace(&mut query.tag, String::new()));
         let time_series = data
             .multiplexer
             .runs
-            .get(&run)
-            .and_then(|acc| acc.time_series.get(&tag))
+            .get(&query.run as &str)
+            .and_then(|acc| acc.time_series.get(&query.tag as &str))
             .ok_or_else(|| ErrorBadRequest("Invalid run/tag"))?;
         let result = time_series
             .iter()
@@ -286,8 +284,20 @@ mod server {
 #[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Clone)]
 struct RunId(String);
 
+impl std::borrow::Borrow<str> for RunId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Clone)]
 struct TagId(String);
+
+impl std::borrow::Borrow<str> for TagId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
 
 #[derive(Debug, PartialEq)]
 struct ScalarPoint {
