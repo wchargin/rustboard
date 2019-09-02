@@ -96,11 +96,12 @@ mod server {
     use actix_files::NamedFile;
     use actix_web::{web, App, HttpServer, Responder};
 
-    struct SharedState {
+    struct AppState {
         logdir: String,
         #[allow(unused)]
         multiplexer: ScalarsMultiplexer,
     }
+    type AppData = Arc<AppState>;
 
     fn index() -> impl Responder {
         NamedFile::open("index.html")
@@ -132,7 +133,7 @@ mod server {
     #[derive(Serialize)]
     struct PluginsListingResponse(HashMap<&'static str, PluginStatus>);
 
-    fn data_plugins_listing(data: web::Data<Arc<SharedState>>) -> impl Responder {
+    fn data_plugins_listing(data: web::Data<AppData>) -> impl Responder {
         let have_scalars = data
             .multiplexer
             .runs
@@ -155,7 +156,7 @@ mod server {
         web::Json(res)
     }
 
-    fn data_runs(data: web::Data<Arc<SharedState>>) -> impl Responder {
+    fn data_runs(data: web::Data<AppData>) -> impl Responder {
         web::Json(
             data.multiplexer
                 .runs
@@ -165,7 +166,7 @@ mod server {
         )
     }
 
-    fn data_logdir(data: web::Data<Arc<SharedState>>) -> impl Responder {
+    fn data_logdir(data: web::Data<AppData>) -> impl Responder {
         web::Json(data.logdir.clone())
     }
 
@@ -189,7 +190,7 @@ mod server {
     #[derive(Serialize)]
     struct TagsResponse(HashMap<RunId, HashMap<TagId, TagInfo>>);
 
-    fn data_plugin_scalars_tags(data: web::Data<Arc<SharedState>>) -> impl Responder {
+    fn data_plugin_scalars_tags(data: web::Data<AppData>) -> impl Responder {
         let mut result: TagsResponse = TagsResponse(HashMap::new());
         for (run, accumulator) in &data.multiplexer.runs {
             let run_info = result.0.entry(run.clone()).or_default();
@@ -210,7 +211,7 @@ mod server {
     struct ScalarsResponse(Vec<(f64, i64, f32)>);
 
     fn data_plugin_scalars_scalars(
-        data: web::Data<Arc<SharedState>>,
+        data: web::Data<AppData>,
         mut query: web::Query<ScalarsRequest>,
     ) -> Result<web::Json<ScalarsResponse>, actix_web::error::Error> {
         use actix_web::error::ErrorBadRequest;
@@ -231,7 +232,7 @@ mod server {
 
     pub fn serve(logdir: String, multiplexer: ScalarsMultiplexer) {
         let address = "localhost:6006";
-        let shared_state = Arc::new(SharedState {
+        let shared_state = Arc::new(AppState {
             logdir,
             multiplexer,
         });
@@ -278,7 +279,7 @@ struct ScalarPoint {
     value: f32,
 }
 
-struct ScalarsMultiplexer {
+pub struct ScalarsMultiplexer {
     runs: HashMap<RunId, ScalarsAccumulator>,
 }
 
