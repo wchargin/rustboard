@@ -1,3 +1,4 @@
+use actix_files::NamedFile;
 use actix_web::{web, App, HttpServer, Responder};
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use serde::{Deserialize, Serialize};
@@ -79,6 +80,10 @@ fn serve(logdir: String, multiplexer: ScalarsMultiplexer) {
         multiplexer: ScalarsMultiplexer,
     }
 
+    fn index() -> impl Responder {
+        NamedFile::open("index.html")
+    }
+
     fn data_logdir(data: web::Data<Arc<SharedState>>) -> impl Responder {
         web::Json(data.logdir.clone())
     }
@@ -150,6 +155,8 @@ fn serve(logdir: String, multiplexer: ScalarsMultiplexer) {
     });
     let server = HttpServer::new(move || {
         App::new()
+            .service(web::resource("/").route(web::get().to(index)))
+            .service(web::resource("/index.html").route(web::get().to(index)))
             .service(web::resource("/data/logdir").route(web::get().to(data_logdir)))
             .service(
                 web::resource("/data/plugin/scalars/tags")
