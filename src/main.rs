@@ -276,6 +276,7 @@ mod server {
                         web::get().to(data_plugin_scalars_scalars),
                     )
                     .data(shared_state.clone())
+                    .wrap(actix_web::middleware::Logger::default())
             })
             .bind(address)
             .expect("Failed to bind");
