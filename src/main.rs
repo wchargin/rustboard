@@ -386,7 +386,6 @@ impl ProtoKey {
         }
     }
 
-    #[allow(unused)]
     fn read_fixed32(&self, buf: &mut &[u8]) -> Option<u32> {
         match self.read(buf) {
             Some(ProtoValue::Fixed32(n)) => Some(n),
@@ -517,6 +516,7 @@ fn parse_value_proto(message: &[u8]) -> Option<TagValue> {
     // Relevant fields on `Value`:
     //   string tag = 1;
     //   SummaryMetadata metadata = 9;
+    //   float simple_value = 2;
     //   TensorProto tensor = 8;
     fn parse_value_field(buf: &mut &[u8], result: &mut PartialTagValue) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
@@ -525,6 +525,12 @@ fn parse_value_proto(message: &[u8]) -> Option<TagValue> {
                 if let Some(tag_bytes) = key.read_length_delimited(buf) {
                     let tag = String::from_utf8_lossy(tag_bytes).into_owned();
                     result.tag = Some(TagId(tag));
+                }
+            }
+            2 => {
+                if let Some(simple_value_bits) = key.read_fixed32(buf) {
+                    result.value = Some(f32::from_bits(simple_value_bits));
+                    result.from_scalars_plugin = true;
                 }
             }
             8 => {
