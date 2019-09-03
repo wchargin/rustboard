@@ -117,8 +117,15 @@ fn main() {
         info!("Read data for {} run(s)", multiplexer.runs.len());
         for (run, accumulator) in &multiplexer.runs {
             info!("* {}", run.0);
-            for (tag, points) in &accumulator.time_series {
-                info!("  - {} ({} points)", tag.0, points.seen);
+            for (tag, ts) in &accumulator.time_series {
+                info!(
+                    "  - {} ({} points; max step {})",
+                    tag.0,
+                    ts.points.seen,
+                    ts.max_step
+                        .map(|x| format!("{:?}", x))
+                        .unwrap_or_else(|| "<no data>".to_string())
+                );
             }
         }
     } else {
@@ -177,7 +184,7 @@ mod server {
             .runs
             .values()
             .flat_map(|accumulator| accumulator.time_series.values())
-            .any(|ts| ts.items.len() > 0);
+            .any(|ts| ts.points.items.len() > 0);
         let mut res = PluginsListingResponse(HashMap::new());
         res.0.insert(
             "scalars",
@@ -281,6 +288,7 @@ mod server {
             .and_then(|acc| acc.time_series.get(&query.tag as &str))
             .ok_or_else(|| ErrorBadRequest("Invalid run/tag"))?;
         let result = time_series
+            .points
             .items
             .iter()
             .map(|pt| (pt.wall_time, pt.step, pt.value))
@@ -363,7 +371,23 @@ struct ScalarsAccumulator {
     reservoir_size: usize,
     first_event_timestamp: Option<f64>,
     known_tags: HashMap<TagId, bool>, // is scalars?
-    time_series: HashMap<TagId, Reservoir<ScalarPoint>>,
+    time_series: HashMap<TagId, TimeSeries>,
+}
+
+struct TimeSeries {
+    max_step: Option<i64>,
+    points: Reservoir<ScalarPoint>,
+}
+
+impl TimeSeries {
+    fn add(&mut self, pt: ScalarPoint) {
+        match self.max_step {
+            None => self.max_step = Some(pt.step),
+            Some(ref mut max_step) if *max_step < pt.step => (*max_step = pt.step),
+            _ => (),
+        };
+        self.points.add(pt)
+    }
 }
 
 impl ScalarsAccumulator {
@@ -375,11 +399,12 @@ impl ScalarsAccumulator {
             time_series: HashMap::new(),
         }
     }
-    fn series(&mut self, tag: TagId) -> &mut Reservoir<ScalarPoint> {
+    fn series(&mut self, tag: TagId) -> &mut TimeSeries {
         let size = self.reservoir_size;
-        self.time_series
-            .entry(tag)
-            .or_insert_with(|| Reservoir::new(size))
+        self.time_series.entry(tag).or_insert_with(|| TimeSeries {
+            max_step: None,
+            points: Reservoir::new(size),
+        })
     }
 }
 
