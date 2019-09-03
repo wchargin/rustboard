@@ -1,12 +1,12 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
-use log::{error, info, warn};
+use log::{error, info};
 use rand_chacha::ChaChaRng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use walkdir::WalkDir;
 
@@ -59,20 +59,18 @@ fn main() {
         })
         .unwrap_or(DEFAULT_RESERVOIR_SIZE);
 
-    let multiplexer = Arc::new(Mutex::new(ScalarsMultiplexer::new()));
-    let mut threads = Vec::new();
-    for entry in WalkDir::new(logdir) {
-        let entry: walkdir::DirEntry = match entry {
-            Ok(entry) => entry,
-            Err(_) => continue,
-        };
-        if !entry.file_type().is_file() {
+    let mut events_files_by_run = HashMap::<RunId, Vec<PathBuf>>::new();
+    for dirent in WalkDir::new(logdir)
+        .into_iter()
+        .filter_map(|result| result.ok())
+    {
+        if !dirent.file_type().is_file() {
             continue;
         }
-        if !entry.file_name().to_string_lossy().contains("tfevents") {
+        if !dirent.file_name().to_string_lossy().contains("tfevents") {
             continue;
         }
-        let run = entry
+        let run = dirent
             .path()
             .parent()
             .map(|x| {
@@ -82,34 +80,33 @@ fn main() {
                     .into_owned()
             })
             .unwrap_or_else(|| ".".to_string());
+        events_files_by_run
+            .entry(RunId(run))
+            .or_default()
+            .push(dirent.path().to_owned());
+    }
+
+    let multiplexer = Arc::new(Mutex::new(ScalarsMultiplexer::new()));
+    let mut threads = Vec::new();
+    for (run, events_files) in events_files_by_run.into_iter() {
         let multiplexer = Arc::clone(&multiplexer);
         threads.push(std::thread::spawn(move || {
-            info!("Reading data for run {:?} from {:?}", run, entry.path());
-            let accumulator = match read_events(entry.path(), reservoir_size) {
-                Ok(acc) => acc,
-                Err(e) => {
+            let mut accumulator = ScalarsAccumulator::from_reservoir_size(reservoir_size);
+            for events_file in events_files {
+                read_events(events_file, &mut accumulator).unwrap_or_else(|e| {
                     error!("{:?}", e);
-                    return;
-                }
-            };
+                });
+            }
             let mut multiplexer = multiplexer
                 .lock()
                 .expect("mutex poisoned; sibling thread panicked");
-            use std::collections::hash_map::Entry;
-            match multiplexer.runs.entry(RunId(run)) {
-                Entry::Occupied(mut e) => {
-                    warn!("Replacing existing data");
-                    e.insert(accumulator);
-                }
-                Entry::Vacant(e) => {
-                    e.insert(accumulator);
-                }
-            }
+            multiplexer.runs.insert(run, accumulator);
         }));
     }
     for thread in threads.into_iter() {
         thread.join().expect("child thread panicked");
     }
+
     let multiplexer: ScalarsMultiplexer = Arc::try_unwrap(multiplexer)
         .map_err(|_| ())
         .expect("lingering reference")
@@ -418,19 +415,18 @@ impl<T> Reservoir<T> {
 
 fn read_events<P: AsRef<Path>>(
     filename: P,
-    reservoir_size: usize,
-) -> io::Result<ScalarsAccumulator> {
+    accumulator: &mut ScalarsAccumulator,
+) -> io::Result<()> {
     let file = File::open(filename)?;
     let mut reader = io::BufReader::new(file);
-    let mut result = ScalarsAccumulator::from_reservoir_size(reservoir_size);
     loop {
         match read_event(&mut reader) {
-            Ok(block) => parse_event_proto(&block, &mut result),
+            Ok(block) => parse_event_proto(&block, accumulator),
             Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
             Err(e) => return Err(e),
         }
     }
-    Ok(result)
+    Ok(())
 }
 
 /// Returns the read TF record, if possible.
