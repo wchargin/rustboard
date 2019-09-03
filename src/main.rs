@@ -1,5 +1,5 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
-use log::{error, info};
+use log::{error, info, warn};
 use rand_chacha::ChaChaRng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -96,6 +96,14 @@ fn main() {
                 read_events(events_file, &mut accumulator).unwrap_or_else(|e| {
                     error!("{:?}", e);
                 });
+            }
+            for (tag, time_series) in &accumulator.time_series {
+                if time_series.skipped_points > 0 {
+                    warn!(
+                        "Skipped {} step-decreasing point(s) in time series {:?} of run {:?}",
+                        time_series.skipped_points, tag.0, run.0,
+                    );
+                }
             }
             let mut multiplexer = multiplexer
                 .lock()
@@ -376,6 +384,7 @@ struct ScalarsAccumulator {
 
 struct TimeSeries {
     max_step: Option<i64>,
+    skipped_points: usize,
     points: Reservoir<ScalarPoint>,
 }
 
@@ -384,7 +393,10 @@ impl TimeSeries {
         match self.max_step {
             None => self.max_step = Some(pt.step),
             Some(ref mut max_step) if *max_step < pt.step => (*max_step = pt.step),
-            _ => (),
+            _ => {
+                self.skipped_points += 1;
+                return;
+            }
         };
         self.points.add(pt)
     }
@@ -403,6 +415,7 @@ impl ScalarsAccumulator {
         let size = self.reservoir_size;
         self.time_series.entry(tag).or_insert_with(|| TimeSeries {
             max_step: None,
+            skipped_points: 0,
             points: Reservoir::new(size),
         })
     }
