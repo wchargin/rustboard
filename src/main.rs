@@ -362,6 +362,7 @@ impl ScalarsMultiplexer {
 struct ScalarsAccumulator {
     reservoir_size: usize,
     first_event_timestamp: Option<f64>,
+    known_tags: HashMap<TagId, bool>, // is scalars?
     time_series: HashMap<TagId, Reservoir<ScalarPoint>>,
 }
 
@@ -370,6 +371,7 @@ impl ScalarsAccumulator {
         ScalarsAccumulator {
             reservoir_size,
             first_event_timestamp: None,
+            known_tags: HashMap::new(),
             time_series: HashMap::new(),
         }
     }
@@ -565,7 +567,13 @@ fn parse_event_proto(event: &Vec<u8>, accumulator: &mut ScalarsAccumulator) {
     let mut wall_time: f64 = 0.0;
     let mut step: i64 = 0;
     let mut tag_values: Vec<TagValue> = Vec::new();
-    while let Some(()) = parse_event_field(&mut buf, &mut wall_time, &mut step, &mut tag_values) {}
+    while let Some(()) = parse_event_field(
+        &mut buf,
+        &mut wall_time,
+        &mut step,
+        &mut tag_values,
+        accumulator,
+    ) {}
     accumulator.first_event_timestamp.get_or_insert(wall_time);
     for tag_value in tag_values.into_iter() {
         accumulator.series(tag_value.tag).add(ScalarPoint {
@@ -577,7 +585,7 @@ fn parse_event_proto(event: &Vec<u8>, accumulator: &mut ScalarsAccumulator) {
 
     // Relevant fields on `Event`:
     //   double wall_time = 1;
-    //   int64 step = 2;
+    //   inter step = 2;
     //   string file_version = 3;
     //   Summary summary = 5;
     fn parse_event_field(
@@ -585,6 +593,7 @@ fn parse_event_proto(event: &Vec<u8>, accumulator: &mut ScalarsAccumulator) {
         wall_time: &mut f64,
         step: &mut i64,
         tag_values: &mut Vec<TagValue>,
+        accumulator: &mut ScalarsAccumulator,
     ) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
@@ -600,7 +609,7 @@ fn parse_event_proto(event: &Vec<u8>, accumulator: &mut ScalarsAccumulator) {
             }
             5 => {
                 if let Some(summary_msg) = key.read_length_delimited(buf) {
-                    match parse_summary_proto(summary_msg) {
+                    match parse_summary_proto(summary_msg, accumulator) {
                         Some(tvs) => tag_values.extend(tvs.into_iter()),
                         None => (),
                     }
@@ -617,20 +626,27 @@ struct TagValue {
     value: f32,
 }
 
-fn parse_summary_proto(message: &[u8]) -> Option<Vec<TagValue>> {
+fn parse_summary_proto(
+    message: &[u8],
+    accumulator: &mut ScalarsAccumulator,
+) -> Option<Vec<TagValue>> {
     let mut buf: &[u8] = &message[..];
     let mut result = Vec::new();
-    while let Some(()) = parse_summary_field(&mut buf, &mut result) {}
+    while let Some(()) = parse_summary_field(&mut buf, &mut result, accumulator) {}
     return Some(result);
 
     // Relevant fields on `Summary`:
     //   repeated Value value = 1;
-    fn parse_summary_field(buf: &mut &[u8], result: &mut Vec<TagValue>) -> Option<()> {
+    fn parse_summary_field(
+        buf: &mut &[u8],
+        result: &mut Vec<TagValue>,
+        accumulator: &mut ScalarsAccumulator,
+    ) -> Option<()> {
         let key = ProtoKey::new(read_varu64(buf)?);
         match key.field_number {
             1 => {
                 if let Some(value_msg) = key.read_length_delimited(buf) {
-                    result.extend(parse_value_proto(value_msg).into_iter())
+                    result.extend(parse_value_proto(value_msg, accumulator).into_iter())
                 }
             }
             _ => key.skip(buf)?,
@@ -639,7 +655,7 @@ fn parse_summary_proto(message: &[u8]) -> Option<Vec<TagValue>> {
     }
 }
 
-fn parse_value_proto(message: &[u8]) -> Option<TagValue> {
+fn parse_value_proto(message: &[u8], accumulator: &mut ScalarsAccumulator) -> Option<TagValue> {
     let mut buf: &[u8] = &message[..];
     struct PartialTagValue {
         tag: Option<TagId>,
@@ -652,13 +668,27 @@ fn parse_value_proto(message: &[u8]) -> Option<TagValue> {
         from_scalars_plugin: false,
     };
     while let Some(()) = parse_value_field(&mut buf, &mut result) {}
-    return match result {
+    let (tag, value, from_scalars_plugin) = match result {
         PartialTagValue {
             tag: Some(tag),
             value: Some(value),
-            from_scalars_plugin: true,
-        } => Some(TagValue { tag, value }),
-        _ => None,
+            from_scalars_plugin,
+        } => (tag, value, from_scalars_plugin),
+        _ => return None,
+    };
+    let is_scalars_tag = match accumulator.known_tags.get(&tag) {
+        Some(v) => *v,
+        None => {
+            accumulator
+                .known_tags
+                .insert(tag.clone(), from_scalars_plugin);
+            from_scalars_plugin
+        }
+    };
+    return if is_scalars_tag {
+        Some(TagValue { tag, value })
+    } else {
+        None
     };
 
     // Relevant fields on `Value`:
