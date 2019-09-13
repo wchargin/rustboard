@@ -48,6 +48,7 @@ fn main() {
             "warn"
         },
     ))
+    .default_format_timestamp_nanos(true)
     .init();
     let logdir = matches.value_of("logdir").unwrap();
     let inspect = matches.is_present("inspect");
@@ -58,6 +59,8 @@ fn main() {
                 .expect("--downsample must be a non-negative integer")
         })
         .unwrap_or(DEFAULT_RESERVOIR_SIZE);
+
+    info!("Starting loading");
 
     let mut events_files_by_run = HashMap::<RunId, Vec<PathBuf>>::new();
     for dirent in WalkDir::new(logdir)
@@ -85,6 +88,12 @@ fn main() {
             .or_default()
             .push(dirent.path().to_owned());
     }
+
+    info!(
+        "Discovered {} runs ({:?} event files)",
+        events_files_by_run.len(),
+        events_files_by_run.values().map(|x| x.len()).sum::<usize>()
+    );
 
     let multiplexer = Arc::new(Mutex::new(ScalarsMultiplexer::new()));
     let mut threads = Vec::new();
@@ -120,6 +129,8 @@ fn main() {
         .expect("lingering reference")
         .into_inner()
         .expect("mutex poisoned; child thread panicked");
+
+    info!("Done loading");
 
     if inspect {
         info!("Read data for {} run(s)", multiplexer.runs.len());
