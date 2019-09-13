@@ -316,7 +316,7 @@ mod server {
 
     impl AppState {
         pub fn serve(self) {
-            let address = "localhost:6006";
+            let address = "0.0.0.0:6006";
             let shared_state = Arc::new(self);
             let server = HttpServer::new(move || {
                 App::new()
