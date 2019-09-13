@@ -216,8 +216,7 @@ mod server {
             .iter()
             .map(|(run_id, accumulator)| (run_id.clone(), accumulator.first_event_timestamp))
             .collect::<Vec<_>>();
-        use std::cmp::Ordering;
-        runs.sort_by(|&(_, t1), &(_, t2)| t1.partial_cmp(&t2).unwrap_or(Ordering::Less));
+        runs.sort_by(|&(_, t1), &(_, t2)| t1.partial_cmp(&t2).unwrap());
         web::Json(
             runs.into_iter()
                 .map(|(run_id, _timestamp)| run_id)
