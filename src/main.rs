@@ -633,7 +633,7 @@ enum ProtoValue<'a> {
     LengthDelimited(&'a [u8]),
 }
 
-fn parse_event_proto(event: &Vec<u8>, accumulator: &mut ScalarsAccumulator) {
+fn parse_event_proto(event: &[u8], accumulator: &mut ScalarsAccumulator) {
     let mut buf: &[u8] = &event[..];
     let mut wall_time: f64 = 0.0;
     let mut step: i64 = 0;
