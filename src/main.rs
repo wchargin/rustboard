@@ -680,9 +680,8 @@ fn parse_event_proto(event: &[u8], accumulator: &mut ScalarsAccumulator) {
             }
             5 => {
                 if let Some(summary_msg) = key.read_length_delimited(buf) {
-                    match parse_summary_proto(summary_msg, accumulator) {
-                        Some(tvs) => tag_values.extend(tvs.into_iter()),
-                        None => (),
+                    if let Some(tvs) = parse_summary_proto(summary_msg, accumulator) {
+                        tag_values.extend(tvs.into_iter());
                     }
                 }
             }
@@ -856,9 +855,8 @@ fn parse_summary_metadata_proto(message: &[u8]) -> Option<PluginName> {
         match key.field_number {
             1 => {
                 if let Some(plugin_data_msg) = key.read_length_delimited(buf) {
-                    match parse_plugin_data_proto(plugin_data_msg) {
-                        Some(v) => *plugin_name = Some(v),
-                        None => (),
+                    if let Some(v) = parse_plugin_data_proto(plugin_data_msg) {
+                        *plugin_name = Some(v);
                     }
                 }
             }
