@@ -894,7 +894,7 @@ fn read_varu64(buf: &mut &[u8]) -> Option<u64> {
     for i in 0..9 {
         let byte = buf.get(0)?;
         *buf = &buf[1..];
-        result |= ((byte & 0x7F) as u64) << (i * 7);
+        result |= u64::from(byte & 0x7F) << (i * 7);
         if byte & 0x80 == 0 {
             return Some(result);
         }
