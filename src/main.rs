@@ -39,6 +39,19 @@ fn main() {
                 .help("Downsample to this number of points per time series")
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("host")
+                .long("host")
+                .help("Host to bind to: e.g., 'localhost' or '0.0.0.0'")
+                .takes_value(true)
+                .default_value("localhost"),
+        )
+        .arg(
+            Arg::with_name("port")
+                .long("port")
+                .help("Port to bind to: e.g., 6006")
+                .default_value("6006"),
+        )
         .get_matches();
 
     env_logger::from_env(env_logger::Env::default().default_filter_or(
@@ -59,6 +72,12 @@ fn main() {
                 .expect("--downsample must be a non-negative integer")
         })
         .unwrap_or(DEFAULT_RESERVOIR_SIZE);
+    let host = matches.value_of("host").expect("has default value");
+    let port = matches
+        .value_of("port")
+        .expect("has default value")
+        .parse::<u16>()
+        .expect("--port must be a u16");
 
     info!("Starting loading");
 
@@ -151,6 +170,8 @@ fn main() {
         server::AppState {
             logdir: logdir.to_string(),
             multiplexer,
+            host: host.to_string(),
+            port,
         }
         .serve();
     }
@@ -164,6 +185,8 @@ mod server {
     pub struct AppState {
         pub logdir: String,
         pub multiplexer: ScalarsMultiplexer,
+        pub host: String,
+        pub port: u16,
     }
     type AppData = Arc<AppState>;
 
@@ -316,7 +339,7 @@ mod server {
 
     impl AppState {
         pub fn serve(self) {
-            let address = "0.0.0.0:6006";
+            let address = format!("{}:{}", &self.host, self.port);
             let shared_state = Arc::new(self);
             let server = HttpServer::new(move || {
                 App::new()
@@ -337,9 +360,9 @@ mod server {
                     .data(shared_state.clone())
                     .wrap(actix_web::middleware::Logger::default())
             })
-            .bind(address)
+            .bind(&address)
             .expect("Failed to bind");
-            println!("Started web server at http://{}", address);
+            println!("Started web server at http://{}", &address);
             server.run().expect("Failed to run");
         }
     }
