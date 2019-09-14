@@ -226,7 +226,7 @@ mod server {
             .runs
             .values()
             .flat_map(|accumulator| accumulator.time_series.values())
-            .any(|ts| ts.points.items.len() > 0);
+            .any(|ts| !ts.points.items.is_empty());
         let mut res = PluginsListingResponse(HashMap::new());
         res.0.insert(
             "scalars",
