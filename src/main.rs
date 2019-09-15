@@ -153,6 +153,7 @@ fn main() {
 
     if inspect {
         info!("Read data for {} run(s)", multiplexer.runs.len());
+        let mut total_points_seen = 0;
         for (run, accumulator) in &multiplexer.runs {
             info!("* {}", run.0);
             for (tag, ts) in &accumulator.time_series {
@@ -164,8 +165,10 @@ fn main() {
                         .map(|x| format!("{:?}", x))
                         .unwrap_or_else(|| "<no data>".to_string())
                 );
+                total_points_seen += ts.points.seen;
             }
         }
+        info!("Total points: {}", total_points_seen);
     } else {
         server::AppState {
             logdir: logdir.to_string(),
