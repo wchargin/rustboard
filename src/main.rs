@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use walkdir::WalkDir;
 
 const DEFAULT_RESERVOIR_SIZE: usize = 1000;
@@ -52,6 +52,13 @@ fn main() {
                 .help("Port to bind to: e.g., 6006")
                 .default_value("6006"),
         )
+        .arg(
+            Arg::with_name("reload_threads")
+                .long("reload-threads")
+                .help("Maximum number of concurrent threads to use when loading data")
+                .takes_value(true)
+                .default_value("8"),
+        )
         .get_matches();
 
     env_logger::from_env(env_logger::Env::default().default_filter_or(
@@ -78,6 +85,11 @@ fn main() {
         .expect("has default value")
         .parse::<u16>()
         .expect("--port must be a u16");
+    let reload_threads = matches
+        .value_of("reload_threads")
+        .expect("has default value")
+        .parse::<usize>()
+        .expect("--reload-threads must be a usize");
 
     info!("Starting loading");
 
@@ -115,9 +127,24 @@ fn main() {
     );
 
     let multiplexer = Arc::new(Mutex::new(ScalarsMultiplexer::new()));
+    let active_threads = Arc::new(Mutex::new(0usize));
+    let spawn_more_threads = Arc::new(Condvar::new());
     let mut threads = Vec::new();
     for (run, events_files) in events_files_by_run.into_iter() {
+        let mut guard = active_threads
+            .lock()
+            .expect("thread-spawn lock poisoned; child thread panicked");
+        while *guard >= reload_threads {
+            guard = spawn_more_threads
+                .wait(guard)
+                .expect("thread-spawn lock poisoned; child thread panicked");
+        }
+        *guard += 1;
+        drop(guard);
+
         let multiplexer = Arc::clone(&multiplexer);
+        let active_threads = Arc::clone(&active_threads);
+        let spawn_more_threads = Arc::clone(&spawn_more_threads);
         threads.push(std::thread::spawn(move || {
             let mut accumulator = ScalarsAccumulator::from_reservoir_size(reservoir_size);
             for events_file in events_files {
@@ -137,6 +164,13 @@ fn main() {
                 .lock()
                 .expect("mutex poisoned; sibling thread panicked");
             multiplexer.runs.insert(run, accumulator);
+
+            let mut guard = active_threads
+                .lock()
+                .expect("thread-spawn lock poisoned; sibling thread panicked");
+            *guard -= 1;
+            std::mem::drop(guard);
+            spawn_more_threads.notify_all();
         }));
     }
     for thread in threads.into_iter() {
