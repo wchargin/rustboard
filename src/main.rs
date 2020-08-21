@@ -1,4 +1,5 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
+use clap::Clap;
 use log::{error, info, warn};
 use rand_chacha::ChaChaRng;
 use serde::{Deserialize, Serialize};
@@ -10,86 +11,53 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use walkdir::WalkDir;
 
-const DEFAULT_RESERVOIR_SIZE: usize = 1000;
+const DEFAULT_RESERVOIR_SIZE_ARG: &'static str = "1000";
+
+#[derive(Clap)]
+struct Opts {
+    /// Directory from which to load data; will be traversed recursively
+    #[clap(long)]
+    logdir: String,
+
+    /// Print statistics about loaded data rather than starting a server
+    #[clap(long)]
+    inspect: bool,
+
+    /// Print more information
+    #[clap(long)]
+    verbose: bool,
+
+    /// Downsample to this number of points per time series
+    #[clap(long, default_value = DEFAULT_RESERVOIR_SIZE_ARG)]
+    downsample: usize,
+
+    /// Host to bind to: e.g., 'localhost' or '0.0.0.0'
+    #[clap(long, default_value = "0.0.0.0")]
+    host: String,
+
+    /// Port to bind to: e.g., 6006
+    #[clap(long, default_value = "6006")]
+    port: u16,
+
+    /// Maximum number of concurrent threads to use when loading data
+    #[clap(long, default_value = "8")]
+    reload_threads: usize,
+}
 
 fn main() {
-    use clap::Arg;
-    let matches = clap::App::new("rustboard")
-        .arg(
-            Arg::with_name("logdir")
-                .long("logdir")
-                .value_name("LOGDIR")
-                .help("Directory from which to load data; will be traversed recursively")
-                .takes_value(true)
-                .required(true),
-        )
-        .arg(
-            Arg::with_name("inspect")
-                .long("inspect")
-                .help("Print statistics about loaded data rather than starting a server"),
-        )
-        .arg(
-            Arg::with_name("verbose")
-                .long("verbose")
-                .help("Print more information."),
-        )
-        .arg(
-            Arg::with_name("downsample")
-                .long("downsample")
-                .help("Downsample to this number of points per time series")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("host")
-                .long("host")
-                .help("Host to bind to: e.g., 'localhost' or '0.0.0.0'")
-                .takes_value(true)
-                .default_value("localhost"),
-        )
-        .arg(
-            Arg::with_name("port")
-                .long("port")
-                .help("Port to bind to: e.g., 6006")
-                .default_value("6006"),
-        )
-        .arg(
-            Arg::with_name("reload_threads")
-                .long("reload-threads")
-                .help("Maximum number of concurrent threads to use when loading data")
-                .takes_value(true)
-                .default_value("8"),
-        )
-        .get_matches();
+    let opts = Opts::parse();
 
-    env_logger::from_env(env_logger::Env::default().default_filter_or(
-        if matches.is_present("verbose") {
-            "info"
-        } else {
-            "warn"
-        },
-    ))
+    env_logger::from_env(
+        env_logger::Env::default().default_filter_or(if opts.verbose { "info" } else { "warn" }),
+    )
     .default_format_timestamp_nanos(true)
     .init();
-    let logdir = matches.value_of("logdir").unwrap();
-    let inspect = matches.is_present("inspect");
-    let reservoir_size: usize = matches
-        .value_of("downsample")
-        .map(|x| {
-            x.parse::<usize>()
-                .expect("--downsample must be a non-negative integer")
-        })
-        .unwrap_or(DEFAULT_RESERVOIR_SIZE);
-    let host = matches.value_of("host").expect("has default value");
-    let port = matches
-        .value_of("port")
-        .expect("has default value")
-        .parse::<u16>()
-        .expect("--port must be a u16");
-    let reload_threads = matches
-        .value_of("reload_threads")
-        .expect("has default value")
-        .parse::<usize>()
-        .expect("--reload-threads must be a usize");
+    let logdir = &opts.logdir;
+    let inspect = opts.inspect;
+    let reservoir_size = opts.downsample;
+    let host = opts.host;
+    let port = opts.port;
+    let reload_threads = opts.reload_threads;
 
     info!("Starting loading");
 
