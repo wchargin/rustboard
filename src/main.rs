@@ -27,6 +27,11 @@ struct Opts {
     #[clap(long)]
     verbose: bool,
 
+    /// Only parse TFRecords. This will not generate useful output for `--inspect` or a
+    /// server, but can be useful for testing a restricted part of the parsing pipeline.
+    #[clap(long)]
+    records_only: bool,
+
     /// Downsample to this number of points per time series
     #[clap(long, default_value = DEFAULT_RESERVOIR_SIZE_ARG)]
     downsample: usize,
@@ -54,6 +59,7 @@ fn main() {
     .init();
     let logdir = &opts.logdir;
     let inspect = opts.inspect;
+    let records_only = opts.records_only;
     let reservoir_size = opts.downsample;
     let host = opts.host;
     let port = opts.port;
@@ -116,7 +122,7 @@ fn main() {
         threads.push(std::thread::spawn(move || {
             let mut accumulator = ScalarsAccumulator::from_reservoir_size(reservoir_size);
             for events_file in events_files {
-                read_events(events_file, &mut accumulator).unwrap_or_else(|e| {
+                read_events(events_file, &mut accumulator, records_only).unwrap_or_else(|e| {
                     error!("{:?}", e);
                 });
             }
@@ -494,12 +500,17 @@ impl<T> Reservoir<T> {
 fn read_events<P: AsRef<Path>>(
     filename: P,
     accumulator: &mut ScalarsAccumulator,
+    records_only: bool,
 ) -> io::Result<()> {
     let file = File::open(filename)?;
     let mut reader = io::BufReader::new(file);
     loop {
         match read_event(&mut reader) {
-            Ok(block) => parse_event_proto(&block, accumulator),
+            Ok(block) => {
+                if !records_only {
+                    parse_event_proto(&block, accumulator);
+                }
+            }
             Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
             Err(e) => return Err(e),
         }
