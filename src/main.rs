@@ -32,6 +32,10 @@ struct Opts {
     #[clap(long)]
     records_only: bool,
 
+    /// Input file buffering capacity. Low-level knob.
+    #[clap(long, default_value = "8192")]
+    buffer_size: usize,
+
     /// Downsample to this number of points per time series
     #[clap(long, default_value = DEFAULT_RESERVOIR_SIZE_ARG)]
     downsample: usize,
@@ -60,6 +64,7 @@ fn main() {
     let logdir = &opts.logdir;
     let inspect = opts.inspect;
     let records_only = opts.records_only;
+    let buffer_size = opts.buffer_size;
     let reservoir_size = opts.downsample;
     let host = opts.host;
     let port = opts.port;
@@ -122,9 +127,10 @@ fn main() {
         threads.push(std::thread::spawn(move || {
             let mut accumulator = ScalarsAccumulator::from_reservoir_size(reservoir_size);
             for events_file in events_files {
-                read_events(events_file, &mut accumulator, records_only).unwrap_or_else(|e| {
-                    error!("{:?}", e);
-                });
+                read_events(events_file, &mut accumulator, records_only, buffer_size)
+                    .unwrap_or_else(|e| {
+                        error!("{:?}", e);
+                    });
             }
             for (tag, time_series) in &accumulator.time_series {
                 if time_series.skipped_points > 0 {
@@ -501,9 +507,10 @@ fn read_events<P: AsRef<Path>>(
     filename: P,
     accumulator: &mut ScalarsAccumulator,
     records_only: bool,
+    buffer_size: usize,
 ) -> io::Result<()> {
     let file = File::open(filename)?;
-    let mut reader = io::BufReader::new(file);
+    let mut reader = io::BufReader::with_capacity(buffer_size, file);
     loop {
         match read_event(&mut reader) {
             Ok(block) => {
